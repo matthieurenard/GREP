@@ -15,11 +15,11 @@
 	static char charSet[256];
 	static struct ParserAutomaton *a;
 
-	static int cmpStateName(void *, void *);
+	static int cmpStateName(const void *, const void *);
 
-	static int cmpClockName(void *, void *);
+	static int cmpClockName(const void *, const void *);
 
-	static int cmpSymLabel(void *, void *);
+	static int cmpSymLabel(const void *, const void *);
 
 	static unsigned int nextId = 0;
 	static unsigned int symId = 0;
@@ -586,26 +586,26 @@ term: 	  '\n'
 %%
 
 /** comparison function to use with list_search **/
-static int cmpStateName(void *p1, void *p2)
+static int cmpStateName(const void *p1, const void *p2)
 {
-	struct ParserState *s = p2;
-	char *name = p1;
+	const struct ParserState *s = p2;
+	const char *name = p1;
 
 	return (strcmp(name, s->name) == 0);
 }
 
-static int cmpClockName(void *p1, void *p2)
+static int cmpClockName(const void *p1, const void *p2)
 {
-	struct ParserClock *clock = p2;
-	char *name = p1;
+	const struct ParserClock *clock = p2;
+	const char *name = p1;
 
 	return (strcmp(name, clock->name) == 0);
 }
 
-static int cmpSymLabel(void *p1, void *p2)
+static int cmpSymLabel(const void *p1, const void *p2)
 {
-	struct ParserSymbol *sym = p2;
-	char *label = p1;
+	const struct ParserSymbol *sym = p2;
+	const char *label = p1;
 
 	return (strcmp(label, sym->label) == 0);
 }
