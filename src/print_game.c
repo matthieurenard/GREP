@@ -6,6 +6,7 @@
 #include <gvc.h>
 #include <list.h>
 #include <set.h>
+#include <fifo.h>
 
 #include "parser_tmdautmtn.h"
 
@@ -14,6 +15,7 @@
 #define MAXNBEDGES		4
 
 enum EdgeType {SUCCEMIT, SUCCSTOPEMIT, SUCCRECCONT, SUCCRECUNCONT};
+enum Strat {EMIT, DONTEMIT};
 
 
 struct State
@@ -34,24 +36,36 @@ typedef struct Node
 	struct State *q;
 	char *word;
 	int owner;
+	int meta;
 	union
 	{
 		struct
 		{
-			struct Node *succEmit;
-			struct Node *succStopEmit;
-			struct Node **predsEmit;
-			struct Node **predsUncont;
+			union
+			{
+				struct Node *succEmit;
+				struct List *succsEmit;
+			};
+			union
+			{
+				struct Node *succStopEmit;
+				struct List *succsStopEmit;
+			};
+			struct List *predsEmit;
+			struct List *predsUncont;
 			struct Node *predContRcvd;
-			int nbPredsUncont;
-			int nbPredsEmit;
+			struct List *predsContMeta;
+			enum Strat strat;
 		} p0;
 		struct
 		{
-			struct Node **succsCont;
-			struct Node **succsUncont;
-			struct Node *predStop;
-			int nbSuccsCont;
+			struct List *succsCont;
+			struct List *succsUncont;
+			union
+			{
+				struct Node *predStop;
+				struct List *predsStop;
+			};
 		} p1;
 	};
 	char *name;
@@ -135,6 +149,12 @@ static int eqPtr(void *p1, void *p2)
 static int listIn(struct List *l, void *data)
 {
 	return (list_search(l, data, eqPtr) != NULL);
+}
+
+static void listAddNoDouble(struct List *l, void *data)
+{
+	if (!listIn(l, data))
+		list_add(l, data);
 }
 
 void removeSetFromList(struct List *l, const struct Set *s)
@@ -221,6 +241,12 @@ void node_setWinning(void *dummy, void *pn)
 	n->isWinning = 1;
 }
 
+void computeStrat(void *dummy, Node *n)
+{
+	if (n->owner == 0 && n->p0.succEmit != NULL && n->p0.succEmit->isWinning)
+		n->p0.strat = EMIT;
+}
+
 
 void setAccepting(Agnode_t *node)
 {
@@ -232,6 +258,7 @@ void setInitial(Agnode_t *node)
 	agset(node, "shape", "square");
 }
 
+#if 0
 void addNodesRec(struct Graph *g, struct State *s, int maxSize, char *word)
 {
 	int size = strlen(word);
@@ -282,6 +309,7 @@ void addNodesRec(struct Graph *g, struct State *s, int maxSize, char *word)
 
 	word[size] = '\0';
 }
+#endif 
 
 void addEdgesToLast(struct Graph *g)
 {
@@ -327,7 +355,7 @@ void addEdgesToLast(struct Graph *g)
 					exit(EXIT_FAILURE);
 				}
 				n->p0.succEmit = dest;
-				dest->p0.predsEmit[dest->p0.nbPredsEmit++] = n;
+				list_add(dest->p0.predsEmit, n);
 
 				/* (q, w.c, 0) <-- (q, w, 1) */
 				sn.q = n->q;
@@ -344,7 +372,7 @@ void addEdgesToLast(struct Graph *g)
 				}
 				n->word[strlen(n->word)] = c;
 				/* !! dest <--> n !! */
-				dest->p1.succsCont[dest->p1.nbSuccsCont++] = n;
+				list_add(dest->p1.succsCont, n);
 				n->p0.predContRcvd = dest;
 			}
 		}
@@ -365,8 +393,8 @@ void addEdgesToLast(struct Graph *g)
 							"lastCreated.\n", n->q->name, n->word);
 					exit(EXIT_FAILURE);
 				}
-				n->p1.succsUncont[i] = dest;
-				dest->p0.predsUncont[dest->p0.nbPredsUncont++] = n;
+				list_add(n->p1.succsUncont, dest);
+				list_add(dest->p0.predsUncont, n);
 			}
 		}
 	}
@@ -380,66 +408,446 @@ void Node_allocSuccPreds(struct Node *n, struct Graph *g)
 
 	if (n->owner == 0)
 	{
-		n->p0.nbPredsUncont = 0;
-		n->p0.nbPredsEmit = 0;
+		n->p0.strat = DONTEMIT;
 		n->p0.succEmit = NULL;
 		n->p0.succStopEmit = NULL;
 		n->p0.predContRcvd = NULL;
-		n->p0.predsEmit = malloc(n->q->nbPredsCont * sizeof *(n->p0.predsEmit));
-		if (n->p0.predsEmit == NULL)
-		{
-			perror("malloc n->p0.predsEmit");
-			exit(EXIT_FAILURE);
-		}
-		n->p0.predsUncont = malloc(n->q->nbPredsUncont * sizeof *(n->p0.predsUncont));
-		if (n->p0.predsUncont == NULL)
-		{
-			perror("malloc n->p0.predsUncont");
-			exit(EXIT_FAILURE);
-		}
+		n->p0.predsEmit = list_new();
+		n->p0.predsUncont = list_new();
 	}
 	else
 	{
 		int size = strlen(g->contsChars);
 
-		n->p1.nbSuccsCont = 0;
 		n->p1.predStop = NULL;
-		n->p1.succsCont = malloc(size * sizeof *(n->p1.succsCont));
-		if (n->p1.succsCont == NULL)
-		{
-			perror("malloc n->p1.succsCont");
-			exit(EXIT_FAILURE);
-		}
-		for (i = 0 ; i < size ; i++)
-		{
-			n->p1.succsCont[i] = NULL;
-		}
-
-		n->p1.succsUncont = malloc(strlen(g->uncontsChars) * sizeof 
-				*(n->p1.succsUncont));
-		if (n->p1.succsUncont == NULL)
-		{
-			perror("malloc n->p1.succsUncont");
-			exit(EXIT_FAILURE);
-		}
+		n->p1.succsCont = list_new();
+		n->p1.succsUncont = list_new();
 	}
 
 }
 
-void addNodes(struct Graph *g, int maxSize)
+void Node_freeWithLinks(struct Graph *g, Node *n)
 {
-	char *word = malloc(maxSize + 1);
+	/* TODO: FREE NODES ! MEMORY LEAK HERE */
+	list_remove(g->nodes, n);
+}
+
+void attr(struct Set *ret, struct Graph *g, int player, const struct Set *U, 
+		struct List *nodes)
+{
+	int stable = 0;
+	struct ListIterator *it;
+
+	set_reset(ret);
+	set_copy(ret, U, NULL);
+
+	while (!stable)
+	{
+		stable = 1;
+
+		for (it = listIterator_first(nodes) ; listIterator_hasNext(it) ; it = 
+				listIterator_next(it))
+		{
+			struct Node *n = listIterator_val(it);
+			if (set_in(ret, n))
+				continue;
+			if (n->owner == player)
+			{
+				if (n->owner == 0)
+				{
+					if ((listIn(nodes, n->p0.succEmit) && set_in(ret, 
+									n->p0.succEmit))
+						|| (listIn(nodes, n->p0.succStopEmit) && set_in(ret, 
+								n->p0.succStopEmit)))
+					{
+						stable = 0;
+						set_add(ret, n);
+					}
+				}
+				else
+				{
+					int i;
+					struct ListIterator *it2;
+
+					for (it2 = listIterator_first(n->p1.succsCont) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						Node *succ = listIterator_val(it2);
+						if (listIn(nodes, succ) && set_in(ret, succ))
+						{
+							stable = 0;
+							set_add(ret, n);
+							break;
+						}
+					}
+					listIterator_release(it2);
+
+					if (stable)
+					{
+						for (it2 = listIterator_first(n->p1.succsUncont) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *succ = listIterator_val(it2);
+							if (listIn(nodes, succ) && 
+									set_in(ret, succ))
+							{
+								stable = 0;
+								set_add(ret, n);
+								break;
+							}
+						}
+						listIterator_release(it2);
+					}
+				}
+			}
+			/* n->owner != owner */
+			else
+			{
+				if (n->owner == 0)
+				{
+					if ((n->word[0] == '\0' ||
+							(listIn(nodes, n->p0.succEmit) && 
+								set_in(ret, n->p0.succEmit))) 
+						&& 
+						listIn(nodes, n->p0.succStopEmit) &&
+							set_in(ret, n->p0.succStopEmit))
+					{
+						stable = 0;
+						set_add(ret, n);
+					}
+				}
+				else
+				{
+					int ok = 1;
+					int i;
+					struct ListIterator *it2;
+
+					for (it2 = listIterator_first(n->p1.succsCont) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						Node *succ = listIterator_val(it2);
+						if (listIn(nodes, succ) && !set_in(ret, succ))
+						{
+							ok = 0;
+							break;
+						}
+					}
+					listIterator_release(it2);
+					if (ok)
+					{
+						for (it2 = listIterator_first(n->p1.succsUncont) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *succ = listIterator_val(it2);
+							if (listIn(nodes, succ) && !set_in(ret, succ))
+							{
+								ok = 0;
+								break;
+							}
+						}
+						listIterator_release(it2);
+						if (ok)
+						{
+							stable = 0;
+							set_add(ret, n);
+						}
+					}
+				}
+			}
+		}
+		listIterator_release(it);
+	}
+}
+
+void computeW0(struct Graph *g, struct Set *ret)
+{
+	struct List *S = list_new();
+	struct ListIterator *it;
+	struct Set *B = set_empty(NULL);
+	struct Set *R = set_empty(NULL);
+	struct Set *Tr = set_empty(NULL);
+	struct Set *W = set_empty(NULL);
+	struct Set *Sset = set_empty(NULL);
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		list_add(S, n);
+		set_add(Sset, n);
+		if (n->isAccepting)
+			set_add(B, n);
+	}
+	listIterator_release(it);
+	set_reset(ret);
+
+	do
+	{
+		attr(R, g, 0, B, S);
+
+		/* Tr = S \ B */
+		set_reset(Tr);
+		for (it = listIterator_first(S) ; listIterator_hasNext(it) ; it = listIterator_next(it))
+		{
+			set_add(Tr, listIterator_val(it));
+		}
+		set_remove(Tr, (int (*)(const void *, const void *))set_in, R);
+
+		attr(W, g, 1, Tr, S);
+		removeSetFromList(S, W);
+
+		set_remove(B, (int (*)(const void *, const void *))set_in, W);
+		set_applyToAll(W, (void (*)(void *, void *))set_add, ret);
+	} while (!set_isEmpty(W));
+
+	/* ret = S \ ret */
+	set_copy(W, ret, NULL);
+	set_copy(ret, Sset, NULL);
+	set_remove(ret, (int (*)(const void *, const void *))set_in, W);
+}
+
+void minimize(struct Graph *g)
+{
+	struct Fifo *wait = fifo_empty();
+	struct Set *toSuppress = set_empty(NULL);
+	struct Set *necessary = set_empty(NULL);
+	struct ListIterator *it;
+
+	for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
+			= listIterator_next(it))
+	{
+		fifo_enqueue(wait, listIterator_val(it));
+	}
+	listIterator_release(it);
+
+	while (!fifo_isEmpty(wait))
+	{
+		struct Node *n = fifo_dequeue(wait);
+		if (set_in(toSuppress, n) || set_in(necessary, n))
+			continue;
+		if (n->owner == 0 && n->p0.predContRcvd != NULL)
+		{
+			struct Node *prev = n->p0.predContRcvd->p1.predStop;
+			struct List *brothers = n->p0.predContRcvd->p1.succsCont;
+			struct Node *prev1 = prev->p0.succStopEmit;
+			int i, same = 1;
+
+			for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
+					it = listIterator_next(it))
+			{
+				Node *brother = listIterator_val(it);
+				if (brother->isWinning != prev->isWinning || 
+						brother->p0.strat != prev->p0.strat)
+				{
+					same = 0;
+					break;
+				}
+			}
+			listIterator_release(it);
+			if (same)
+			{
+				for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
+						it = listIterator_next(it))
+				{
+					Node *brother = listIterator_val(it);
+					set_add(toSuppress, brother);
+					set_add(toSuppress, brother->p0.succStopEmit);
+				}
+				listIterator_release(it);
+
+				fifo_enqueue(wait, prev);
+				prev->word = realloc(prev->word, strlen(prev->word) + 2);
+				if (prev->word == NULL)
+				{
+					perror("realloc prev->word");
+					exit(EXIT_FAILURE);
+				}
+				prev->word[strlen(prev->word) + 1] = '\0';
+				prev->word[strlen(prev->word)] = '*';
+				free(prev->name);
+				prev->name = malloc(Node_nameSize(prev));
+				if (prev->name == NULL)
+				{
+					perror("malloc prev->name");
+					exit(EXIT_FAILURE);
+				}
+				Node_name(prev->name, prev);
+				if (!prev->meta)
+				{
+					struct Node *tmp;
+					prev->meta = 1;
+					/*
+					tmp = prev->p0.succStopEmit;
+					prev->p0.succsStopEmit = list_new();
+					list_add(prev->p0.succsStopEmit, tmp);
+					*/
+					tmp = prev->p0.succEmit;
+					prev->p0.succsEmit = list_new();
+					if (tmp != NULL)
+						list_add(prev->p0.succsEmit, tmp);
+					prev->p0.predsContMeta = list_new();
+				}
+
+				if (prev1->word[0] != '\0')
+					free(prev1->word);
+				prev1->word = strdup(prev->word);
+				free(prev1->name);
+				prev1->name = malloc(Node_nameSize(prev1));
+				if (prev1->name == NULL)
+				{
+					perror("malloc prev1->name");
+					exit(EXIT_FAILURE);
+				}
+				Node_name(prev1->name, prev1);
+				if (!prev1->meta)
+				{
+					struct Node *tmp;
+					prev1->meta = 1;
+					/*
+					tmp = prev1->p1.predStop;
+					prev1->p1.predsStop = list_new();
+					list_add(prev1->p1.predsStop, tmp);
+					*/
+					
+				}
+
+
+				/* Remove nodes from the graph (redirect all the brothers to 
+				 * prev) 
+				 */
+				for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
+						it = listIterator_next(it))
+				{
+					Node *brother = listIterator_val(it);
+					struct ListIterator *it2;
+
+					/* replace brother --> q by prev --> q */
+					if (brother->meta)
+					{
+						for (it2 = listIterator_first(brother->p0.succsEmit) ; listIterator_hasNext(it2) ; 
+								it2 = listIterator_next(it2))
+						{
+							Node *succ = listIterator_val(it2);
+							listAddNoDouble(prev->p0.succsEmit, succ);
+							list_remove(succ->p0.predsEmit, brother);
+							listAddNoDouble(succ->p0.predsEmit, prev);
+						}
+						listIterator_release(it2);
+
+						/*
+						for (it2 = listIterator_first(brother->p0.succsStopEmit) 
+								; listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *succ = listIterator_val(it2);
+							listAddNoDouble(prev->p0.succsStopEmit, succ);
+							if (succ->meta)
+							{
+								list_remove(succ->p1.predsStop, brother);
+								listAddNoDouble(succ->p1.predsStop, prev);
+							}
+							else
+								succ->p1.predStop = prev;
+						}
+						listIterator_release(it2);
+						*/
+					}
+					else
+					{
+						Node *succ = brother->p0.succEmit;
+						listAddNoDouble(prev->p0.succsEmit, succ);
+						list_remove(succ->p0.predsEmit, brother);
+						listAddNoDouble(succ->p0.predsEmit, prev);
+					}
+
+
+
+					/* Replace q --> brother by q --> prev */
+					for (it2 = listIterator_first(brother->p0.predsEmit) ; listIterator_hasNext(it2) ; 
+							it2 = listIterator_next(it2))
+					{
+						Node *pred = listIterator_val(it2);
+						if (pred->meta)
+						{
+							list_remove(pred->p0.succsEmit, brother);
+							listAddNoDouble(pred->p0.succsEmit, prev);
+						}
+						else
+							pred->p0.succEmit = prev;
+						listAddNoDouble(prev->p0.predsEmit, pred);
+					}
+					listIterator_release(it2);
+
+					for (it2 = listIterator_first(brother->p0.predsUncont) ; listIterator_hasNext(it2) ; 
+							it2 = listIterator_next(it2))
+					{
+						Node *pred = listIterator_val(it2);
+						list_remove(pred->p1.succsUncont, brother);
+						listAddNoDouble(pred->p1.succsUncont, prev);
+						listAddNoDouble(prev->p0.predsUncont, pred);
+					}
+					listIterator_release(it2);
+
+					if (brother->meta)
+					{
+						for (it2 = listIterator_first(brother->p0.predsContMeta) 
+								; listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *pred = listIterator_val(it2);
+							list_remove(pred->p1.succsCont, brother);
+							listAddNoDouble(pred->p1.succsCont, prev);
+							listAddNoDouble(prev->p0.predsContMeta, pred);
+						}
+						listIterator_release(it2);
+					}
+
+					{
+						Node *pred = brother->p0.predContRcvd;
+						list_remove(pred->p1.succsCont, brother);
+						listAddNoDouble(pred->p1.succsCont, prev);
+						listAddNoDouble(prev->p0.predsContMeta, pred);
+					}
+				}
+				listIterator_release(it);
+			}
+			else
+			{
+				for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
+						it = listIterator_next(it))
+				{
+					Node *brother = listIterator_val(it);
+					set_add(necessary, brother);
+				}
+				listIterator_release(it);
+			}
+		}
+	}
+
+	set_applyToAll(toSuppress, (void (*)(void *, void *))Node_freeWithLinks, g);
+
+	set_free(toSuppress);
+	set_free(necessary);
+}
+
+void addNodes(struct Graph *g)
+{
+	const char *emptyWord = "";
 	Node *n;
-	int i, wordSize = 0;
+	int i, wordSize = 0, changed;
 	struct ListIterator *it;
 	struct List *newNodes = list_new(), *tmpList;
+	struct Set *W0 = set_empty(NULL);
 
 	for (it = listIterator_first(g->states) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
 	{
 		struct State *s = listIterator_val(it);
 		
-		word[0] = '\0';
 		for (i = 0 ; i <= 1 ; i++)
 		{
 			n = malloc(sizeof *n);
@@ -452,7 +860,8 @@ void addNodes(struct Graph *g, int maxSize)
 			n->owner = i;
 			n->isAccepting = s->isAccepting;
 			n->isInitial = (s->isInitial && n->owner == 1);
-			n->word = strdup(word);
+			n->meta = 0;
+			n->word = strdup(emptyWord);
 			n->name = malloc(Node_nameSize(n));
 			if (n->name == NULL)
 			{
@@ -471,7 +880,7 @@ void addNodes(struct Graph *g, int maxSize)
 	addEdgesToLast(g);
 
 	wordSize = 1;
-	while (wordSize <= maxSize)
+	do
 	{
 		for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
 				= listIterator_next(it))
@@ -522,132 +931,29 @@ void addNodes(struct Graph *g, int maxSize)
 		newNodes = tmpList;
 
 		addEdgesToLast(g);
+		computeW0(g, W0);
+		set_applyToAll(W0, node_setWinning, NULL);
+		set_applyToAll(W0, (void (*)(void *, void *))computeStrat, NULL);
+
+		changed = 0;
+		for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) 
+				; it = listIterator_next(it))
+		{
+			Node *n = listIterator_val(it);
+			if (n->owner == 0 && n->p0.predContRcvd != NULL)
+			{
+				struct Node *prev = n->p0.predContRcvd->p1.predStop;
+				if (prev->isWinning != n->isWinning || prev->p0.strat != n->p0.strat)
+				{
+					changed = 1;
+					break;
+				}
+			}
+		}
+		listIterator_release(it);
+
 		wordSize++;
-	}
-
-	free(word);
-}
-
-
-void addEdges(struct Graph *g, int maxWordSize)
-{
-	Node *n, *dest;
-	struct SearchNode sn;
-	struct ListIterator *it;
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		n = listIterator_val(it);
-		if (n->owner == 0)
-		{
-			/* Emit a controllable event */
-			if (n->word[0] != '\0')
-			{
-				sn.q = n->q->contSuccs[(unsigned char)n->word[0]];
-				sn.owner = 0;
-				sn.word = n->word + 1;
-				dest = list_search(g->nodes, &sn, cmpNode);
-				if (dest == NULL)
-				{
-					fprintf(stderr, "ERROR: cannot find node (%s, %s, %d).\n", 
-							sn.q->name, sn.word, sn.owner);
-					exit(EXIT_FAILURE);
-				}
-				n->p0.succEmit = dest;
-			}
-			/* Stop emitting (let 1 play) */
-			sn.q = n->q;
-			sn.owner = 1;
-			sn.word = n->word;
-			dest = list_search(g->nodes, &sn, cmpNode);
-			if (dest == NULL)
-			{
-				fprintf(stderr, "ERROR: cannot find node (%s, %s, %d) (1).\n", 
-						sn.q->name, sn.word, sn.owner);
-				exit(EXIT_FAILURE);
-			}
-			n->p0.succStopEmit = dest;
-		}
-		else /* n->owner == 1 */
-		{
-			n->p1.succsCont = malloc(strlen(g->contsChars) * sizeof 
-					*(n->p1.succsCont));
-			if (n->p1.succsCont == NULL)
-			{
-				perror("malloc n->p1.succsCont");
-				exit(EXIT_FAILURE);
-			}
-			n->p1.succsUncont = malloc(strlen(g->uncontsChars) * sizeof 
-					*(n->p1.succsUncont));
-			if (n->p1.succsUncont == NULL)
-			{
-				perror("malloc n->p1.succsUncont");
-				exit(EXIT_FAILURE);
-			}
-			/* Add a controllable event */
-			if (strlen(n->word) < maxWordSize)
-			{
-				int i, nbConts = strlen(g->contsChars);
-				int size = strlen(n->word);
-				char *word = malloc(size + 2);
-
-				strcpy(word, n->word);
-				word[size + 1] = '\0';
-
-				sn.q = n->q;
-				sn.word = word;
-				sn.owner = 0;
-
-				for (i = 0 ; i < nbConts ; i++)
-				{
-					word[size] = g->contsChars[i];
-					dest = list_search(g->nodes, &sn, cmpNode);
-					if (dest == NULL)
-					{
-						fprintf(stderr, "ERROR: cannot find node (%s, %s, " 
-								"%d) (2).\n", sn.q->name, sn.word, sn.owner);
-						exit(EXIT_FAILURE);
-					}
-					n->p1.succsCont[i] = dest;
-				}
-
-				free(word);
-			}
-			else
-			{
-				int nbConts = strlen(g->contsChars);
-				int i;
-				for (i = 0 ; i < nbConts ; i++)
-				{
-					n->p1.succsCont[i] = NULL;
-				}
-			}
-			/* Receive an uncontrollable event */
-			/* if nothing */
-			{
-				int i, nbUnconts = strlen(g->uncontsChars);
-
-				sn.word = n->word;
-				sn.owner = 0;
-				
-				for (i = 0 ; i < nbUnconts ; i++)
-				{
-					sn.q = n->q->uncontsSuccs[(unsigned char)g->uncontsChars[i]];
-
-					dest = list_search(g->nodes, &sn, cmpNode);
-					if (dest == NULL)
-					{
-						fprintf(stderr, "ERROR: cannot find node (%s, %s, " 
-								"%d) (3).\n", sn.q->name, sn.word, sn.owner);
-						exit(EXIT_FAILURE);
-					}
-					n->p1.succsUncont[i] = dest;
-				}
-			}
-		}
-	}
-	listIterator_release(it);
+	} while (changed);
 }
 
 void createStates(struct Graph *g, const struct List *states, const struct List 
@@ -736,7 +1042,7 @@ void createStates(struct Graph *g, const struct List *states, const struct List
 	listIterator_release(it);
 }
 
-void createGraphFromAutomaton(struct Graph *g, const char *filename, int maxWordSize)
+void createGraphFromAutomaton(struct Graph *g, const char *filename)
 {
 	const struct List *pstates = NULL;
 	const struct List *pconts = NULL;
@@ -760,182 +1066,7 @@ void createGraphFromAutomaton(struct Graph *g, const char *filename, int maxWord
 	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars));
 	createStates(g, pstates, pedges);
 
-	addNodes(g, maxWordSize);
-}
-
-void attr(struct Set *ret, struct Graph *g, int player, const struct Set *U, 
-		struct List *nodes)
-{
-	int stable = 0;
-	struct ListIterator *it;
-
-	set_reset(ret);
-	set_copy(ret, U, NULL);
-
-	fprintf(stderr, "attr 1\n");
-	while (!stable)
-	{
-		stable = 1;
-
-		for (it = listIterator_first(nodes) ; listIterator_hasNext(it) ; it = 
-				listIterator_next(it))
-		{
-			struct Node *n = listIterator_val(it);
-			if (set_in(ret, n))
-				continue;
-			if (n->owner == player)
-			{
-				if (n->owner == 0)
-				{
-					if ((listIn(nodes, n->p0.succEmit) && set_in(ret, 
-									n->p0.succEmit))
-						|| (listIn(nodes, n->p0.succStopEmit) && set_in(ret, 
-								n->p0.succStopEmit)))
-					{
-						stable = 0;
-						set_add(ret, n);
-					}
-				}
-				else
-				{
-					int i, size;
-					size = strlen(g->contsChars);
-					for (i = 0 ; i < size ; i++)
-					{
-						if (listIn(nodes, n->p1.succsCont[i]) && set_in(ret, 
-									n->p1.succsCont[i]))
-						{
-							stable = 0;
-							set_add(ret, n);
-							break;
-						}
-					}
-					if (stable)
-					{
-						size = strlen(g->uncontsChars);
-						for (i = 0 ; i < size ; i++)
-						{
-							if (listIn(nodes, n->p1.succsUncont[i]) && 
-									set_in(ret, n->p1.succsUncont[i]))
-							{
-								stable = 0;
-								set_add(ret, n);
-								break;
-							}
-						}
-					}
-				}
-			}
-			/* n->owner != owner */
-			else
-			{
-				if (n->owner == 0)
-				{
-					if ((n->word[0] == '\0' ||(listIn(nodes, n->p0.succEmit) 
-									&& set_in(ret, n->p0.succEmit))) && 
-							listIn(nodes, n->p0.succStopEmit) && set_in(ret, 
-								n->p0.succStopEmit))
-					{
-						stable = 0;
-						set_add(ret, n);
-					}
-				}
-				else
-				{
-					int ok = 1;
-					int size = strlen(g->contsChars);
-					int i;
-
-					for (i = 0 ; i < size ; i++)
-					{
-						if (listIn(nodes, n->p1.succsCont[i]) && !set_in(ret, 
-									n->p1.succsCont[i]))
-						{
-							ok = 0;
-							break;
-						}
-					}
-					if (ok)
-					{
-						size = strlen(g->uncontsChars);
-						for (i = 0 ; i < size ; i++)
-						{
-							if (listIn(nodes, n->p1.succsUncont[i]) && 
-									!set_in(ret, n->p1.succsUncont[i]))
-							{
-								ok = 0;
-								break;
-							}
-						}
-						if (ok)
-						{
-							stable = 0;
-							set_add(ret, n);
-						}
-					}
-				}
-			}
-		}
-		listIterator_release(it);
-	}
-	fprintf(stderr, "attr(%d, {", player);
-	set_applyToAll(U, printNode, stderr);
-	fprintf(stderr, "}) = {");
-	set_applyToAll(ret, printNode, stderr);
-	fprintf(stderr, "}\n");
-
-	fprintf(stderr, "attr - end\n");
-}
-
-void computeW0(struct Graph *g, struct Set *ret)
-{
-	struct List *S = list_new();
-	struct ListIterator *it;
-	struct Set *B = set_empty(NULL);
-	struct Set *R = set_empty(NULL);
-	struct Set *Tr = set_empty(NULL);
-	struct Set *W = set_empty(NULL);
-	struct Set *Sset = set_empty(NULL);
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-		list_add(S, n);
-		set_add(Sset, n);
-		if (n->isAccepting)
-			set_add(B, n);
-	}
-	listIterator_release(it);
-	set_reset(ret);
-
-	fprintf(stderr, "1\n");
-
-	do
-	{
-		attr(R, g, 0, B, S);
-
-		/* Tr = S \ B */
-		set_reset(Tr);
-		for (it = listIterator_first(S) ; listIterator_hasNext(it) ; it = listIterator_next(it))
-		{
-			set_add(Tr, listIterator_val(it));
-		}
-		set_remove(Tr, (int (*)(const void *, const void *))set_in, R);
-
-		attr(W, g, 1, Tr, S);
-		removeSetFromList(S, W);
-
-		set_remove(B, (int (*)(const void *, const void *))set_in, W);
-		set_applyToAll(W, (void (*)(void *, void *))set_add, ret);
-	} while (!set_isEmpty(W));
-
-	/* ret = S \ ret */
-	set_copy(W, ret, NULL);
-	set_copy(ret, Sset, NULL);
-	set_remove(ret, (int (*)(const void *, const void *))set_in, W);
-
-	fprintf(stderr, "2\n");
+	addNodes(g);
 }
 
 void drawGraph(struct Graph *g)
@@ -966,6 +1097,8 @@ void drawGraph(struct Graph *g)
 			agset(gnode, "shape", "square");
 		if (n->isWinning)
 			agset(gnode, "color", "green");
+		if (n->owner == 0 && n->p0.strat == EMIT)
+			agset(gnode, "color", "blue");
 		nviz = agbindrec(gnode, "Node", sizeof *nviz, FALSE);
 		nviz->n = n;
 	}
@@ -983,7 +1116,7 @@ void drawGraph(struct Graph *g)
 		n = nviz->n;
 		if (n->owner == 0)
 		{
-			if (n->word[0] != '\0')
+			if (!n->meta && n->p0.succEmit != NULL)
 			{
 				gdest = agnode(gviz, n->p0.succEmit->name, FALSE);
 				if (gdest == NULL)
@@ -995,49 +1128,87 @@ void drawGraph(struct Graph *g)
 				gedge = agedge(gviz, gnode, gdest, "emit", TRUE);
 				agset(gedge, "color", "green");
 			}
-
-			gdest = agnode(gviz, n->p0.succStopEmit->name, FALSE);
-			if (gdest == NULL)
+			if (n->meta)
 			{
-				fprintf(stderr, "ERROR: cannot find gnode %s (2).\n", 
-						n->p0.succStopEmit->name);
-				exit(EXIT_FAILURE);
+				for (it = listIterator_first(n->p0.succsEmit) ; 
+						listIterator_hasNext(it) ; it = listIterator_next(it))
+				{
+					Node *succ = listIterator_val(it);
+					gdest = agnode(gviz, succ->name, FALSE);
+					if (gdest == NULL)
+					{
+						fprintf(stderr, "ERROR: cannot find gnode %s (1.1).\n", 
+								succ->name);
+						exit(EXIT_FAILURE);
+					}
+					gedge = agedge(gviz, gnode, gdest, succ->name, TRUE);
+					agset(gedge, "color", "green");
+				}
+				listIterator_release(it);
+				/*
+				for (it = listIterator_first(n->p0.succsStopEmit) ; 
+						listIterator_hasNext(it) ; it = listIterator_next(it))
+				{
+					Node *succ = listIterator_val(it);
+					gdest = agnode(gviz, succ->name, FALSE);
+					if (gdest == NULL)
+					{
+						fprintf(stderr, "ERROR: cannot find gnode %s (1.2).\n", 
+								succ->name);
+						exit(EXIT_FAILURE);
+					}
+					gedge = agedge(gviz, gnode, gdest, succ->name, TRUE);
+					agset(gedge, "color", "blue");
+				}
+				listIterator_release(it);
+				*/
 			}
-			gedge = agedge(gviz, gnode, gdest, "stopEmit", TRUE);
-			agset(gedge, "color", "blue");
+
+			{
+				gdest = agnode(gviz, n->p0.succStopEmit->name, FALSE);
+				if (gdest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find gnode %s (2).\n", 
+							n->p0.succStopEmit->name);
+					exit(EXIT_FAILURE);
+				}
+				gedge = agedge(gviz, gnode, gdest, "stopEmit", TRUE);
+				agset(gedge, "color", "blue");
+			}
 		}
 		else /* n->owner == 1 */
 		{
-			int nbChars = strlen(g->contsChars);
-			for (i = 0 ; i < nbChars ; i++)
+			for (it = listIterator_first(n->p1.succsCont) ; 
+					listIterator_hasNext(it) ; it = listIterator_next(it))
 			{
-				if (n->p1.succsCont[i] != NULL) /* Max buffer size */
+				Node *succ = listIterator_val(it);
+				gdest = agnode(gviz, succ->name, FALSE);
+				if (gdest == NULL)
 				{
-					gdest = agnode(gviz, n->p1.succsCont[i]->name, FALSE);
-					if (gdest == NULL)
-					{
-						fprintf(stderr, "ERROR: cannot find gnode %s (3).\n", 
-								n->p1.succsCont[i]->name);
-						exit(EXIT_FAILURE);
-					}
-					gedge = agedge(gviz, gnode, gdest, "cont", TRUE);
-					agset(gedge, "color", "orange");
+					fprintf(stderr, "ERROR: cannot find gnode %s (3) from %s.\n", 
+							succ->name, n->name);
+					exit(EXIT_FAILURE);
 				}
+				gedge = agedge(gviz, gnode, gdest, "cont", TRUE);
+				agset(gedge, "color", "orange");
 			}
+			listIterator_release(it);
 
-			nbChars = strlen(g->uncontsChars);
-			for (i = 0 ; i < nbChars ; i++)
+			for (it = listIterator_first(n->p1.succsUncont) ; 
+					listIterator_hasNext(it) ; it = listIterator_next(it))
 			{
-				gdest = agnode(gviz, n->p1.succsUncont[i]->name, FALSE);
+				Node *succ = listIterator_val(it);
+				gdest = agnode(gviz, succ->name, FALSE);
 				if (gdest == NULL)
 				{
 					fprintf(stderr, "ERROR: cannot find gnode %s (4).\n", 
-							n->p1.succsUncont[i]->name);
+							succ->name);
 					exit(EXIT_FAILURE);
 				}
 				gedge = agedge(gviz, gnode, gdest, "uncont", TRUE);
 				agset(gedge, "color", "red");
 			}
+			listIterator_release(it);
 		}
 	}
 
@@ -1058,19 +1229,16 @@ int main(int argc, char *argv[])
 	struct Set *W = set_empty(NULL);
 	struct ListIterator *it;
 
-	if (argc < 3)
+	if (argc < 2)
 	{
-		fprintf(stderr, "Usage : %s <filename> <bufferSize>\n", argv[0]);
-		fprintf(stderr, "Where <filename> is an automaton file and <bufferSize>" 
-				" is the maximal size of controllable events present in the buffer" 
-				" of the enforcement mechanism.\n");
+		fprintf(stderr, "Usage : %s <filename>\n", argv[0]);
+		fprintf(stderr, "Where <filename> is an automaton file\n");
 		exit(EXIT_FAILURE);
 	}
 
 	filename = argv[1];
-	maxBufferSize = atoi(argv[2]);
 
-	createGraphFromAutomaton(&g, filename, maxBufferSize);
+	createGraphFromAutomaton(&g, filename);
 	for (it = listIterator_first(g.nodes) ; listIterator_hasNext(it) ; it = listIterator_next(it))
 	{
 		Node *n = listIterator_val(it);
@@ -1079,7 +1247,7 @@ int main(int argc, char *argv[])
 	}
 	listIterator_release(it);
 	computeW0(&g, W);
-	set_applyToAll(W, node_setWinning, NULL);
+	minimize(&g);
 	drawGraph(&g);
 	
 	return EXIT_SUCCESS;
