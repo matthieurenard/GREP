@@ -138,10 +138,8 @@ int main(int argc, char *argv[])
 	struct Args args;
 	struct Graph *g;
 	struct Enforcer *e;
-	char c;
 	char buffer[BUFFER_SIZE];
-	struct timeval initTime, currentTime, previousTime, nextTime;
-	struct timeval pollingArg, *pollingTime = NULL;
+	struct timeval currentTime, previousTime, nextTime;
 	fd_set rfds;
 	int i, quit = 0, pending = 0;
 	unsigned int nextDelay = 1;
