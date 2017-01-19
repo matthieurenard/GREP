@@ -162,7 +162,8 @@ void list_cleanup(struct List *l, void (*release)(void *))
 	for (p = e ; e != NULL ; p = e)
 	{
 		e = e->next;
-		release(p->data);
+		if (release != NULL)
+			release(p->data);
 		free(p);
 	}
 	l->head = NULL;
