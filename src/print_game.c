@@ -5,6 +5,7 @@
 
 #include <gvc.h>
 #include <list.h>
+#include <set.h>
 
 #include "parser.h"
 
@@ -46,6 +47,7 @@ typedef struct Node
 	char *name;
 	int isAccepting;
 	int isInitial;
+	int isWinning;
 } Node;
 
 struct VizNode
@@ -107,6 +109,33 @@ static int cmpNode(void *val, void *pNode)
 	struct SearchNode *s = val;
 	return (n->q == s->q && n->owner == s->owner &&
 			strcmp(s->word, n->word) == 0);
+}
+
+static int notSetIn(struct Set *s, void *el)
+{
+	return !set_in(s, el);
+}
+
+static int eqPtr(void *p1, void *p2)
+{
+	return (p1 == p2);
+}
+
+static int listIn(struct List *l, void *data)
+{
+	return (list_search(l, data, eqPtr) != NULL);
+}
+
+void removeSetFromList(struct List *l, const struct Set *s)
+{
+	set_applyToAll(s, (void (*)(void*, void*))list_remove, l);
+}
+
+void printNode(void *pf, void *pn)
+{
+	Node *n = pn;
+	FILE *out = (pf == NULL) ? stderr : pf;
+	fprintf(out, "%s, ", n->name);
 }
 
 void createChars(const struct List *l, struct List **psymbolTable, char **pchars)
@@ -174,6 +203,13 @@ char *Node_name(char *s, Node *n)
 	return s;
 }
 
+void node_setWinning(void *dummy, void *pn)
+{
+	Node *n = pn;
+	(void)dummy;
+	n->isWinning = 1;
+}
+
 
 void setAccepting(Agnode_t *node)
 {
@@ -223,6 +259,7 @@ void addNodesRec(struct Graph *g, struct State *s, int maxSize, char *word)
 				exit(EXIT_FAILURE);
 			}
 			Node_name(n->name, n);
+			n->isWinning = 0;
 			list_add(g->nodes, n);
 			list_add(g->nodesP[i], n);
 		}
@@ -262,6 +299,7 @@ void addNodes(struct Graph *g, struct State *s, int maxSize)
 			exit(EXIT_FAILURE);
 		}
 		Node_name(n->name, n);
+		n->isWinning = 0;
 		list_add(g->nodes, n);
 		list_add(g->nodesP[i], n);
 	}
@@ -508,6 +546,181 @@ void createGraphFromAutomaton(struct Graph *g, const char *filename, int maxWord
 	addEdges(g, maxWordSize);
 }
 
+void attr(struct Set *ret, struct Graph *g, int player, const struct Set *U, 
+		struct List *nodes)
+{
+	int stable = 0;
+	struct ListIterator *it;
+
+	set_reset(ret);
+	set_copy(ret, U, NULL);
+
+	fprintf(stderr, "attr 1\n");
+	while (!stable)
+	{
+		stable = 1;
+
+		for (it = listIterator_first(nodes) ; listIterator_hasNext(it) ; it = 
+				listIterator_next(it))
+		{
+			struct Node *n = listIterator_val(it);
+			if (set_in(ret, n))
+				continue;
+			if (n->owner == player)
+			{
+				if (n->owner == 0)
+				{
+					if ((listIn(nodes, n->p0.succEmit) && set_in(ret, 
+									n->p0.succEmit))
+						|| (listIn(nodes, n->p0.succStopEmit) && set_in(ret, 
+								n->p0.succStopEmit)))
+					{
+						stable = 0;
+						set_add(ret, n);
+					}
+				}
+				else
+				{
+					int i, size;
+					size = strlen(g->contsChars);
+					for (i = 0 ; i < size ; i++)
+					{
+						if (listIn(nodes, n->p1.succsCont[i]) && set_in(ret, 
+									n->p1.succsCont[i]))
+						{
+							stable = 0;
+							set_add(ret, n);
+							break;
+						}
+					}
+					if (stable)
+					{
+						size = strlen(g->uncontsChars);
+						for (i = 0 ; i < size ; i++)
+						{
+							if (listIn(nodes, n->p1.succsUncont[i]) && 
+									set_in(ret, n->p1.succsUncont[i]))
+							{
+								stable = 0;
+								set_add(ret, n);
+								break;
+							}
+						}
+					}
+				}
+			}
+			/* n->owner != owner */
+			else
+			{
+				if (n->owner == 0)
+				{
+					if ((n->word[0] == '\0' ||(listIn(nodes, n->p0.succEmit) 
+									&& set_in(ret, n->p0.succEmit))) && 
+							listIn(nodes, n->p0.succStopEmit) && set_in(ret, 
+								n->p0.succStopEmit))
+					{
+						stable = 0;
+						set_add(ret, n);
+					}
+				}
+				else
+				{
+					int ok = 1;
+					int size = strlen(g->contsChars);
+					int i;
+
+					for (i = 0 ; i < size ; i++)
+					{
+						if (listIn(nodes, n->p1.succsCont[i]) && !set_in(ret, 
+									n->p1.succsCont[i]))
+						{
+							ok = 0;
+							break;
+						}
+					}
+					if (ok)
+					{
+						size = strlen(g->uncontsChars);
+						for (i = 0 ; i < size ; i++)
+						{
+							if (listIn(nodes, n->p1.succsUncont[i]) && 
+									!set_in(ret, n->p1.succsUncont[i]))
+							{
+								ok = 0;
+								break;
+							}
+						}
+						if (ok)
+						{
+							stable = 0;
+							set_add(ret, n);
+						}
+					}
+				}
+			}
+		}
+		listIterator_release(it);
+	}
+	fprintf(stderr, "attr(%d, {", player);
+	set_applyToAll(U, printNode, stderr);
+	fprintf(stderr, "}) = {");
+	set_applyToAll(ret, printNode, stderr);
+	fprintf(stderr, "}\n");
+
+	fprintf(stderr, "attr - end\n");
+}
+
+void computeW0(struct Graph *g, struct Set *ret)
+{
+	struct List *S = list_new();
+	struct ListIterator *it;
+	struct Set *B = set_empty(NULL);
+	struct Set *R = set_empty(NULL);
+	struct Set *Tr = set_empty(NULL);
+	struct Set *W = set_empty(NULL);
+	struct Set *Sset = set_empty(NULL);
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		list_add(S, n);
+		set_add(Sset, n);
+		if (n->isAccepting)
+			set_add(B, n);
+	}
+	listIterator_release(it);
+	set_reset(ret);
+
+	fprintf(stderr, "1\n");
+
+	do
+	{
+		attr(R, g, 0, B, S);
+
+		/* Tr = S \ B */
+		set_reset(Tr);
+		for (it = listIterator_first(S) ; listIterator_hasNext(it) ; it = listIterator_next(it))
+		{
+			set_add(Tr, listIterator_val(it));
+		}
+		set_remove(Tr, (int (*)(const void *, const void *))set_in, R);
+
+		attr(W, g, 1, Tr, S);
+		removeSetFromList(S, W);
+
+		set_remove(B, (int (*)(const void *, const void *))set_in, W);
+		set_applyToAll(W, (void (*)(void *, void *))set_add, ret);
+	} while (!set_isEmpty(W));
+
+	/* ret = S \ ret */
+	set_copy(W, ret, NULL);
+	set_copy(ret, Sset, NULL);
+	set_remove(ret, (int (*)(const void *, const void *))set_in, W);
+
+	fprintf(stderr, "2\n");
+}
+
 void drawGraph(struct Graph *g)
 {
 	Agraph_t *gviz;
@@ -522,6 +735,7 @@ void drawGraph(struct Graph *g)
 	gviz = agopen("G", Agdirected, NULL);
 	agattr(gviz, AGNODE, "color", "black");
 	agattr(gviz, AGNODE, "shape", "ellipse");
+	agattr(gviz, AGNODE, "peripheries", "1");
 	agattr(gviz, AGEDGE, "color", "black");
 
 	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
@@ -530,9 +744,11 @@ void drawGraph(struct Graph *g)
 		n = listIterator_val(it);
 		gnode = agnode(gviz, n->name, TRUE);
 		if (n->isAccepting)
-			agset(gnode, "color", "blue");
+			agset(gnode, "peripheries", "2");
 		if (n->isInitial)
 			agset(gnode, "shape", "square");
+		if (n->isWinning)
+			agset(gnode, "color", "green");
 		nviz = agbindrec(gnode, "Node", sizeof *nviz, FALSE);
 		nviz->n = n;
 	}
@@ -622,6 +838,8 @@ int main(int argc, char *argv[])
 	struct Graph g;
 	char *filename;
 	int maxBufferSize;
+	struct Set *W = set_empty(NULL);
+	struct ListIterator *it;
 
 	if (argc < 3)
 	{
@@ -636,6 +854,15 @@ int main(int argc, char *argv[])
 	maxBufferSize = atoi(argv[2]);
 
 	createGraphFromAutomaton(&g, filename, maxBufferSize);
+	for (it = listIterator_first(g.nodes) ; listIterator_hasNext(it) ; it = listIterator_next(it))
+	{
+		Node *n = listIterator_val(it);
+		if (n->isAccepting)
+			set_add(W, n);
+	}
+	listIterator_release(it);
+	computeW0(&g, W);
+	set_applyToAll(W, node_setWinning, NULL);
 	drawGraph(&g);
 	
 	return EXIT_SUCCESS;
