@@ -659,8 +659,9 @@ void minimize(struct Graph *g)
 					Node *prevBrother = 
 						list_search(prev->p0.predContRcvd->p1.succsCont, 
 								brother, cmpLastBufferChar);
-					if (prevBrother->isWinning != brother->isWinning || 
-							prevBrother->p0.strat != brother->p0.strat)
+					if (prevBrother != NULL && (prevBrother->isWinning != 
+							brother->isWinning || prevBrother->p0.strat != 
+							brother->p0.strat))
 						sameSuccs = 0;
 				}
 			}
@@ -985,6 +986,56 @@ void minimize(struct Graph *g)
 						listAddNoDouble(n1->p1.succsUncont, brother1SuccUncont);
 					}
 					listIterator_release(it2);
+				}
+				listIterator_release(it);
+			}
+			else if (sameSuccs)
+			{
+				for (it = listIterator_first(brothers) ; 
+						listIterator_hasNext(it) ; it = listIterator_next(it))
+				{
+					Node *brother = listIterator_val(it);
+					Node *brother1 = brother->p0.succStopEmit;
+					int wordSize = strlen(brother->word) + 1;
+
+					set_add(necessary, brother);
+					set_add(necessary, brother1);
+
+					if (wordSize < 3)
+						continue;
+
+					if (brother->word[wordSize - 2] != '*')
+					{
+						brother->word = realloc(brother->word, wordSize + 1);
+						if (brother->word == NULL)
+						{
+							perror("realloc brother->word");
+							exit(EXIT_FAILURE);
+						}
+						brother->word[wordSize] = '\0';
+						brother->word[wordSize - 1] = brother->word[wordSize - 
+							2];
+						brother->word[wordSize - 2] = '*';
+						free(brother->name);
+						brother->name = malloc(Node_nameSize(brother));
+						if (brother->name == NULL)
+						{
+							perror("malloc brother->name");
+							exit(EXIT_FAILURE);
+						}
+						Node_name(brother->name, brother);
+
+						free(brother1->word);
+						brother1->word = strdup(brother->word);
+						free(brother1->name);
+						brother1->name = malloc(Node_nameSize(brother1));
+						if (brother1->name == NULL)
+						{
+							perror("malloc brother1->name");
+							exit(EXIT_FAILURE);
+						}
+						Node_name(brother1->name, brother1);
+					}
 				}
 				listIterator_release(it);
 			}
