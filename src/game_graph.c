@@ -2840,10 +2840,10 @@ enum Strat enforcer_getStrat(const struct Enforcer *e)
 	fprintf(e->log, "enforcer_getStrat: ");
 	fprintf(e->log, "(%s, %s) - (%s, %s)", e->realNode->z->name, 
 			e->realNode->sa->s, e->stratNode->z->name, e->stratNode->sa->s);
-	fprintf(e->log, "- strat: %s\n", (e->stratNode->p0.strat == EMIT) ? "emit" : 
-			"dontemit");
+	fprintf(e->log, "- strat: %s\n", (e->stratNode->isWinning && e->stratNode != 
+				e->realNode) ? "emit" : "dontemit");
 	fprintf(e->log, "%d\n", e->stratNode->owner);
-	if (e->stratNode->p0.strat == EMIT && e->realNode->sa->s[0] != '\0')
+	if (e->stratNode->isWinning && e->stratNode != e->realNode)
 		return STRAT_EMIT;
 	return STRAT_DONTEMIT;
 }
@@ -2860,11 +2860,17 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 		pe = fifo_dequeue(e->realBuffer);
 		fifo_enqueue(fifo, pe);
 
-		if (e->stratNode->isLeaf)
-			e->stratNode = e->stratNode->p0.succEmitAll;
-		e->stratNode = e->stratNode->p0.succStopEmit
-			->p1.succsCont[contIndex(e->g, pe->c)];
+		if (e->stratNode == e->realNode || !e->stratNode->isWinning)
+		{
+			while (e->stratNode->isLeaf)
+				e->stratNode = e->stratNode->p0.succEmit;
+			e->stratNode = e->stratNode->p0.succStopEmit
+				->p1.succsCont[contIndex(e->g, pe->c)];
+		}
 	}
+
+	if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
+		e->stratNode = e->realNode->p0.succEmit;
 
 	fifo_free(e->realBuffer);
 	e->realBuffer = fifo;
@@ -2919,10 +2925,12 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 			fifo_enqueue(e->realBuffer, pe);
 		}
 
-		if (e->stratNode->isLeaf)
-			e->stratNode = e->stratNode->p0.succEmitAll;
+		while (e->stratNode->isLeaf)
+			e->stratNode = e->stratNode->p0.succEmit;
 		
 		e->stratNode = e->stratNode->p0.succStopEmit->p1.succsCont[el->index];
+		if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
+			e->stratNode = e->realNode->p0.succEmit;
 	}
 	else
 	{
@@ -3009,11 +3017,8 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	te->event = strdup(sym->sym);
 	fifo_enqueue(e->output, te);
 
-	if (e->stratNode == e->realNode && fifo_isEmpty(e->realBuffer))
-		e->stratNode = e->stratNode->p0.succEmit;
-
-	for (it = 
-			listIterator_first(e->realNode->z->resetsConts[e->g->contsEls[(unsigned 
+	for (it = listIterator_first( 
+				e->realNode->z->resetsConts[e->g->contsEls[(unsigned 
 					char)e->realNode->sa->s[0]]->index]) ; 
 			listIterator_hasNext(it) ; it = listIterator_next(it))
 	{
@@ -3027,6 +3032,9 @@ unsigned int enforcer_emit(struct Enforcer *e)
 		pe = fifo_dequeue(e->realBuffer);
 		e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[pe->index];
 	}
+
+	if (e->stratNode == e->realNode)
+		enforcer_computeStratNode(e);
 
 	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
 			e->realNode->sa->s, e->stratNode->z->name, e->stratNode->sa->s);
@@ -3063,6 +3071,7 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 void enforcer_free(struct Enforcer *e)
 {
 	FILE *out = e->log;
+	char *s;
 
 	fprintf(e->log, "Shutting down the enforcer...\n");
 	fprintf(e->log, "Summary of the execution:\n");
@@ -3088,6 +3097,12 @@ void enforcer_free(struct Enforcer *e)
 	fifo_free(e->output);
 
 	fprintf(e->log, "\nRemaining events in the buffer: ");
+	s = e->realNode->sa->s;
+	while (*s != '\0')
+	{
+		struct SymbolTableEl *el = e->g->contsEls[(unsigned char)*(s++)];
+		fprintf(e->log, "%s ", el->sym);
+	}
 	while (!fifo_isEmpty(e->realBuffer))
 	{
 		struct PrivateEvent *pe = fifo_dequeue(e->realBuffer);
