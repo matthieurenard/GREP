@@ -640,7 +640,7 @@ void minimize(struct Graph *g)
 			struct Node *prev = n->p0.predContRcvd->p1.predStop;
 			struct List *brothers = list_new();
 			struct Node *prev1 = prev->p0.succStopEmit;
-			int i, same = 1;
+			int i, same = 1, sameBrothers = 1, sameSuccs = 1;
 
 			for (it = listIterator_first(n->p0.predContRcvd->p1.succsCont) ; listIterator_hasNext(it) ; 
 					it = listIterator_next(it))
@@ -649,12 +649,25 @@ void minimize(struct Graph *g)
 				list_add(brothers, brother);
 				if (brother->isWinning != prev->isWinning || 
 						brother->p0.strat != prev->p0.strat)
-				{
 					same = 0;
-					break;
+				if (brother->isWinning != n->isWinning || brother->p0.strat != 
+						n->p0.strat)
+					sameBrothers = 0;
+				if (!brother->meta && brother->word[0] != '\0' && 
+						brother->word[1] != '\0')
+				{
+					Node *prevBrother = 
+						list_search(prev->p0.predContRcvd->p1.succsCont, 
+								brother, cmpLastBufferChar);
+					if (prevBrother->isWinning != brother->isWinning || 
+							prevBrother->p0.strat != brother->p0.strat)
+						sameSuccs = 0;
 				}
 			}
 			listIterator_release(it);
+
+			/* remove all brothers, merge with the previous node (with buffer 
+			 * size -1 */
 			if (same)
 			{
 				for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
@@ -822,10 +835,163 @@ void minimize(struct Graph *g)
 				}
 				listIterator_release(it);
 			}
-			else
+			else if (sameBrothers)
 			{
+				Node *n1 = n->p0.succStopEmit;
 				for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
 						it = listIterator_next(it))
+				{
+					Node *brother = listIterator_val(it);
+
+					if (brother != n)
+					{
+						set_add(toSuppress, brother);
+						set_add(toSuppress, brother->p0.succStopEmit);
+					}
+				}
+				listIterator_release(it);
+
+				if (n->meta)
+				{
+					/* Remove '*' */
+					n->word[strlen(n->word) - 1] = '\0';
+					/* Replace the letter before by '+' */
+					n->word[strlen(n->word) - 1] = '+';
+					n1->word[strlen(n1->word) - 1] = '\0';
+					n1->word[strlen(n1->word) - 1] = '+';
+				}
+				else
+				{
+					Node *tmp;
+					n->meta = 1;
+					tmp = n->p0.succEmit;
+					n->p0.succsEmit = list_new();
+					list_add(n->p0.succsEmit, tmp);
+					n->word[strlen(n->word) - 1] = '?';
+					n1->word[strlen(n1->word) - 1] = '?';
+				}
+				n->name = realloc(n->name, Node_nameSize(n));
+				if (n->name == NULL)
+				{
+					perror("realloc n->name");
+					exit(EXIT_FAILURE);
+				}
+				Node_name(n->name, n);
+				n1->name = realloc(n1->name, Node_nameSize(n1));
+				if (n1->name == NULL)
+				{
+					perror("realloc n1->name");
+					exit(EXIT_FAILURE);
+				}
+				Node_name(n1->name, n1);
+
+				for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
+						it = listIterator_next(it))
+				{
+					Node *brother = listIterator_val(it);
+					Node *brother1 = brother->p0.succStopEmit;
+					struct ListIterator *it2;
+					if (brother == n)
+						continue;
+
+					/* Redirect all on n */
+					if (brother->meta)
+					{
+						for (it2 = listIterator_first(brother->p0.succsEmit) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *brotherSuccEmit = listIterator_val(it2);
+							list_remove(brotherSuccEmit->p0.predsEmit, brother);
+							listAddNoDouble(brotherSuccEmit->p0.predsEmit, n);
+							listAddNoDouble(n->p0.succsEmit, brotherSuccEmit);
+						}
+						listIterator_release(it2);
+					}
+					else
+					{
+						Node *brotherSuccEmit = brother->p0.succEmit;
+						list_remove(brotherSuccEmit->p0.predsEmit, brother);
+						listAddNoDouble(brotherSuccEmit->p0.predsEmit, n);
+						listAddNoDouble(n->p0.succsEmit, brotherSuccEmit);
+					}
+
+					/* Here, predContRcvd is the same for all brothers */
+					list_remove(brother->p0.predContRcvd->p1.succsCont, brother);
+
+					if (brother->meta)
+					{
+						for (it2 = listIterator_first(brother->p0.predsContMeta) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *brotherPredCont = listIterator_val(it2);
+							list_remove(brotherPredCont->p1.succsCont, brother);
+							listAddNoDouble(brotherPredCont->p1.succsCont, n);
+							listAddNoDouble(n->p0.predsContMeta, brotherPredCont);
+						}
+						listIterator_release(it2);
+					}
+
+					for (it2 = listIterator_first(brother->p0.predsEmit) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						Node *brotherPredEmit = listIterator_val(it2);
+						if (brotherPredEmit->meta)
+						{
+							list_remove(brotherPredEmit->p0.succsEmit, brother);
+							listAddNoDouble(brotherPredEmit->p0.succsEmit, n);
+						}
+						else
+							brotherPredEmit->p0.succEmit = n;
+						list_remove(n->p0.predsEmit, brother);
+						listAddNoDouble(n->p0.predsEmit, brotherPredEmit);
+					}
+					listIterator_release(it2);
+
+					for (it2 = listIterator_first(brother->p0.predsUncont) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						Node *brotherPredUncont = listIterator_val(it2);
+						list_remove(brotherPredUncont->p1.succsUncont, brother);
+						listAddNoDouble(brotherPredUncont->p1.succsUncont, n);
+						listAddNoDouble(n->p0.predsUncont, brotherPredUncont);
+					}
+					listIterator_release(it2);
+				
+					for (it2 = listIterator_first(brother1->p1.succsCont) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						Node *brother1SuccCont = listIterator_val(it2);
+						list_remove(brother1SuccCont->p0.predsContMeta, brother1);
+						if (brother1SuccCont->p0.predContRcvd == brother1)
+							brother1SuccCont->p0.predContRcvd = n1;
+						else
+							listAddNoDouble(brother1SuccCont->p0.predsContMeta, n1);
+						listAddNoDouble(n1->p1.succsCont, brother1SuccCont);
+					}
+					listIterator_release(it2);
+
+					for (it2 = listIterator_first(brother1->p1.succsUncont) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						Node *brother1SuccUncont = listIterator_val(it2);
+						list_remove(brother1SuccUncont->p0.predsUncont, brother1);
+						listAddNoDouble(brother1SuccUncont->p0.predsUncont, n1);
+						listAddNoDouble(n1->p1.succsUncont, brother1SuccUncont);
+					}
+					listIterator_release(it2);
+				}
+				listIterator_release(it);
+			}
+			else
+			{
+				for (it = listIterator_first(brothers) ; 
+						listIterator_hasNext(it) ; it = listIterator_next(it))
 				{
 					Node *brother = listIterator_val(it);
 					set_add(necessary, brother);
@@ -1170,8 +1336,8 @@ void drawGraph(struct Graph *g)
 					gdest = agnode(gviz, succ->name, FALSE);
 					if (gdest == NULL)
 					{
-						fprintf(stderr, "ERROR: cannot find gnode %s (1.1).\n", 
-								succ->name);
+						fprintf(stderr, "ERROR: cannot find gnode %s from %s "
+								"(1.1).\n", succ->name, n->name);
 						exit(EXIT_FAILURE);
 					}
 					gedge = agedge(gviz, gnode, gdest, succ->name, TRUE);
@@ -1234,8 +1400,8 @@ void drawGraph(struct Graph *g)
 				gdest = agnode(gviz, succ->name, FALSE);
 				if (gdest == NULL)
 				{
-					fprintf(stderr, "ERROR: cannot find gnode %s (4).\n", 
-							succ->name);
+					fprintf(stderr, "ERROR: cannot find gnode %s from %s " 
+							"(4).\n", succ->name, n->name);
 					exit(EXIT_FAILURE);
 				}
 				gedge = agedge(gviz, gnode, gdest, "uncont", TRUE);
