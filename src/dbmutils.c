@@ -126,7 +126,7 @@ int dbmw_containsZero(const struct Dbmw *dbm)
 	return dbm_hasZero(dbm->dbm, dbm->dim);
 }
 
-int dbmw_isPointIncluded(const int32_t *val, const struct Dbmw *dbm)
+int dbmw_isPointIncluded(const struct Dbmw *dbm, const int32_t *val)
 {
 	return dbm_isPointIncluded(val, dbm->dbm, dbm->dim);
 }
@@ -201,6 +201,32 @@ unsigned int dbmw_nextPoint(struct Dbmw *dst, const struct Dbmw *from)
 			max = d;
 	}
 	dbmw_updateIncrementAll(dst, max);
+
+	return max;
+}
+
+/* Compute the distance of a valuation v to a zone, i.e. the smallest delay d 
+ * such that v + d is in the zone .
+ * Requires that up(v) /\ zone is not empty (thus d exists) */
+unsigned int dbmw_distance(const int32_t *val, const struct Dbmw *to)
+{
+	int i;
+	unsigned int max = 0;
+
+	for (i = 1 ; i < to->dim ; i++)
+	{
+		/* take the opposite of to[i], since it is <= -c to say x >= c */
+		unsigned int d = -dbm_raw2bound(to->dbm[i]) - val[i];
+		if (dbm_rawIsStrict(to->dbm[i]))
+			d++;
+		if (val[i] > -dbm_raw2bound(to->dbm[i]))
+		{
+			fprintf(stderr, "Error: %d > %d\n", val[i], 
+					-dbm_raw2bound(to->dbm[i]));
+			return -1;
+		}
+		max = (d > max) ? d : max;
+	}
 
 	return max;
 }

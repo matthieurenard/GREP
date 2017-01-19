@@ -140,10 +140,11 @@ int main(int argc, char *argv[])
 	struct Enforcer *e;
 	char c;
 	char buffer[BUFFER_SIZE];
-	struct timeval initTime, currentTime, previousTime, rpollingTime;
+	struct timeval initTime, currentTime, previousTime, nextTime;
 	struct timeval pollingArg, *pollingTime = NULL;
 	fd_set rfds;
 	int i, quit = 0, pending = 0;
+	unsigned int nextDelay = 1;
 
 	initArgs(&args);
 	parseArgs(argc, argv, &args);
@@ -162,13 +163,6 @@ int main(int argc, char *argv[])
 
 	e = enforcer_new(g, args.logFile);
 
-	if (args.pollingTime != 0)
-	{
-		rpollingTime.tv_sec = args.pollingTime / 1000;
-		rpollingTime.tv_usec = args.pollingTime * 1000;
-		pollingTime = &pollingArg;
-	}
-
 	if (gettimeofday(&previousTime, NULL) == -1)
 	{
 		perror("gettimeofday");
@@ -180,10 +174,32 @@ int main(int argc, char *argv[])
 		int ready = 0;
 		FD_ZERO(&rfds);
 		FD_SET(STDIN_FILENO, &rfds);
-		pollingArg.tv_sec = rpollingTime.tv_sec;
-		pollingArg.tv_usec = rpollingTime.tv_usec;
 
-		ready = select(1, &rfds, NULL, NULL, pollingTime);
+		if (nextDelay != 0)
+		{
+			if (gettimeofday(&currentTime, NULL) == -1)
+			{
+				perror("gettimeofday");
+				exit(EXIT_FAILURE);
+			}
+
+			if (nextDelay > timeval_delay(&currentTime, &previousTime))
+				nextDelay -= timeval_delay(&currentTime, &previousTime);
+			else
+				nextDelay = 0;
+
+			nextTime.tv_sec = nextDelay / 1000;
+			nextTime.tv_usec = (nextDelay % 1000) * 1000;
+
+			fprintf(stderr, " nextDelay = %u\n", nextDelay);
+			fprintf(stderr, "Waiting %ld seconds...\n", nextTime.tv_sec * 1000 + 
+					nextTime.tv_usec / 1000);
+			ready = select(1, &rfds, NULL, NULL, &nextTime);
+			gettimeofday(&nextTime, NULL);
+			fprintf(stderr, "Waited %u ms\n", timeval_delay(&nextTime, &currentTime));
+		}
+		else
+			ready = select(1, &rfds, NULL, NULL, NULL);
 		/* There is some new event */
 		if (ready >= 1)
 		{
@@ -229,12 +245,12 @@ int main(int argc, char *argv[])
 								exit(EXIT_FAILURE);
 							}
 							delay = timeval_delay(&currentTime, &previousTime);
-							enforcer_delay(e, delay);
+							nextDelay = enforcer_delay(e, delay);
 							sym[i] = '\0';
 							event.label = sym;
-							enforcer_eventRcvd(e, &event);
+							nextDelay = enforcer_eventRcvd(e, &event);
 							while (enforcer_getStrat(e) == STRAT_EMIT)
-								enforcer_emit(e);
+								nextDelay = enforcer_emit(e);
 							timeval_cp(&previousTime, &currentTime);
 						}
 						sym += ++i;
@@ -251,7 +267,9 @@ int main(int argc, char *argv[])
 				exit(EXIT_FAILURE);
 			}
 		   	delay = timeval_delay(&currentTime, &previousTime);
-			enforcer_delay(e, delay);
+			nextDelay = enforcer_delay(e, delay);
+			while (enforcer_getStrat(e) == STRAT_EMIT)
+				nextDelay = enforcer_emit(e);
 			timeval_cp(&previousTime, &currentTime);
 		}
 	}

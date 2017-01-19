@@ -56,9 +56,9 @@ void *zone_getData(const struct Zone *);
 
 struct Enforcer *enforcer_new(const struct Graph *, FILE *);
 enum Strat enforcer_getStrat(const struct Enforcer *);
-void enforcer_eventRcvd(struct Enforcer *, const struct Event *);
-void enforcer_emit(struct Enforcer *);
-void enforcer_delay(struct Enforcer *, unsigned int);
+unsigned int enforcer_eventRcvd(struct Enforcer *, const struct Event *);
+unsigned int enforcer_emit(struct Enforcer *);
+unsigned int enforcer_delay(struct Enforcer *, unsigned int);
 void enforcer_free(struct Enforcer *);
 
 #endif
