@@ -11,7 +11,7 @@ AC_CONFIG_HEADERS([config.h])
 # Checks for programs.
 AC_PROG_CC
 AC_PROG_YACC
-AC_PROG_LEX
+AM_PROG_LEX
 
 LT_INIT
 
