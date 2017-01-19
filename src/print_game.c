@@ -46,11 +46,7 @@ typedef struct Node
 				struct Node *succEmit;
 				struct List *succsEmit;
 			};
-			union
-			{
-				struct Node *succStopEmit;
-				struct List *succsStopEmit;
-			};
+			struct Node *succStopEmit;
 			struct List *predsEmit;
 			struct List *predsUncont;
 			struct Node *predContRcvd;
@@ -61,11 +57,7 @@ typedef struct Node
 		{
 			struct List *succsCont;
 			struct List *succsUncont;
-			union
-			{
-				struct Node *predStop;
-				struct List *predsStop;
-			};
+			struct Node *predStop;
 		} p1;
 	};
 	char *name;
@@ -92,6 +84,7 @@ struct SymbolTableEl
 	char *sym;
 	unsigned int id;
 	char c;
+	int size;
 };
 
 struct Graph
@@ -175,6 +168,42 @@ void printNode(void *pf, void *pn)
 	fprintf(out, "%s, ", n->name);
 }
 
+void symbolTableEl_free(struct SymbolTableEl *el)
+{
+	free(el->sym);
+	free(el);
+}
+
+void node_free(Node *n)
+{
+	if (n->owner == 0)
+	{
+		if (n->meta)
+		{
+			list_free(n->p0.succsEmit, NULL);
+			list_free(n->p0.predsContMeta, NULL);
+		}
+		list_free(n->p0.predsEmit, NULL);
+		list_free(n->p0.predsUncont, NULL);
+	}
+	else
+	{
+		list_free(n->p1.succsCont, NULL);
+		list_free(n->p1.succsUncont, NULL);
+	}
+				
+	free(n->name);
+	free(n->word);
+	free(n);
+}
+
+void state_free(struct State *s)
+{
+	free(s->name);
+	free(s);
+}
+	
+
 void createChars(const struct List *l, struct List **psymbolTable, char **pchars)
 {
 	int size = list_size(l);
@@ -219,6 +248,7 @@ void createChars(const struct List *l, struct List **psymbolTable, char **pchars
 		el->c = chars[i];
 		el->sym = strdup(parserSymbol_getLabel(s));
 		el->id = parserSymbol_getId(s);
+		el->size = strlen(el->sym);
 		list_add(symbolTable, el);
 	}
 	listIterator_release(it);
@@ -435,6 +465,7 @@ void Node_allocSuccPreds(struct Node *n, struct Graph *g)
 void Node_freeWithLinks(struct Graph *g, Node *n)
 {
 	/* TODO: FREE NODES ! MEMORY LEAK HERE */
+	node_free(n);
 	list_remove(g->nodes, n);
 }
 
@@ -601,6 +632,7 @@ void computeW0(struct Graph *g, struct Set *ret)
 		{
 			set_add(Tr, listIterator_val(it));
 		}
+		listIterator_release(it);
 		set_remove(Tr, (int (*)(const void *, const void *))set_in, R);
 
 		attr(W, g, 1, Tr, S);
@@ -614,6 +646,13 @@ void computeW0(struct Graph *g, struct Set *ret)
 	set_copy(W, ret, NULL);
 	set_copy(ret, Sset, NULL);
 	set_remove(ret, (int (*)(const void *, const void *))set_in, W);
+
+	list_free(S, NULL);
+	set_free(B);
+	set_free(R);
+	set_free(Tr);
+	set_free(W);
+	set_free(Sset);
 }
 
 void minimize(struct Graph *g)
@@ -1057,6 +1096,7 @@ void minimize(struct Graph *g)
 
 	set_free(toSuppress);
 	set_free(necessary);
+	fifo_free(wait);
 }
 
 void addNodes(struct Graph *g)
@@ -1132,6 +1172,7 @@ void addNodes(struct Graph *g)
 				n->word[wordSize-1] = g->contsChars[i];
 				n->word[wordSize] = '\0';
 				n->owner = src->owner;
+				n->meta = 0;
 				n->name = malloc(Node_nameSize(n));
 				if (n->name == NULL)
 				{
@@ -1204,6 +1245,7 @@ void addNodes(struct Graph *g)
 		wordSize++;
 	} while (changed);
 
+	list_free(newNodes, NULL);
 }
 
 void createStates(struct Graph *g, const struct List *states, const struct List 
@@ -1317,6 +1359,98 @@ void createGraphFromAutomaton(struct Graph *g, const char *filename)
 	createStates(g, pstates, pedges);
 
 	addNodes(g);
+
+	parser_cleanup();
+}
+
+void Gnode_setLabel(Agnode_t *gnode, struct Graph *g)
+{
+	char *label;
+	int size = 0, i;
+	struct VizNode *viz = (struct VizNode *)aggetrec(gnode, "Node", FALSE);
+	Node *n;
+	struct SymbolTableEl **syms;
+	struct SymbolTableEl starSym, plusSym;
+
+	starSym.sym = "*";
+	starSym.size = 1;
+	starSym.c = '*';
+	starSym.id = -1;
+	plusSym.sym = "+";
+	plusSym.size = 1;
+	plusSym.c = '+';
+	plusSym.id = -1;
+
+	if (viz == NULL)
+	{
+		fprintf(stderr, "ERROR: No node associated to gnode %s\n", 
+				agnameof(gnode));
+		exit(EXIT_FAILURE);
+	}
+
+	n = viz->n;
+	syms = malloc(strlen(n->word) * sizeof *syms);
+	if (syms == NULL)
+	{
+		perror("malloc syms");
+		exit(EXIT_FAILURE);
+	}
+
+	i = 0;
+	while (n->word[i] != '\0')
+	{
+		struct SymbolTableEl *s;
+		if (n->word[i] == '*')
+			s = &starSym;
+		else if (n->word[i] == '+')
+			s = &plusSym;
+		else
+		{
+
+			s = list_search(g->contsTable, &(n->word[i]), 
+					cmpSymbolChar);
+			if (s == NULL)
+			{
+				fprintf(stderr, "ERROR: could not find symbol associated to %c\n", 
+						n->word[i]);
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		size += s->size;
+		syms[i++] = s;
+	}
+	if (n->word[0] == '\0');
+		size++;
+
+	/* 7 = strlen("(, , 0)") */
+	size += strlen(n->q->name) + 7;
+
+	label = malloc(size + 1);
+	if (label == NULL)
+	{
+		perror("malloc label");
+		exit(EXIT_FAILURE);
+	}
+	label[0] = '(';
+	label[1] = '\0';
+	strcat(label, n->q->name);
+	strcat(label, ", ");
+	i = 0;
+	while (n->word[i] != '\0')
+	{
+		strcat(label, syms[i]->sym);
+		i++;
+	}
+	if (n->word[0] == '\0')
+		strcat(label, "-");
+	strcat(label, ", ");
+	strcat(label, (n->owner == 0) ? "0)" : "1)");
+
+	agset(gnode, "label", label);
+
+	free(syms);
+	free(label);
 }
 
 void drawGraph(struct Graph *g)
@@ -1334,6 +1468,7 @@ void drawGraph(struct Graph *g)
 	agattr(gviz, AGNODE, "color", "black");
 	agattr(gviz, AGNODE, "shape", "ellipse");
 	agattr(gviz, AGNODE, "peripheries", "1");
+	agattr(gviz, AGNODE, "label", "node");
 	agattr(gviz, AGEDGE, "color", "black");
 
 	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
@@ -1356,6 +1491,7 @@ void drawGraph(struct Graph *g)
 
 	for (gnode = agfstnode(gviz) ; gnode != NULL ; gnode = agnxtnode(gviz, gnode))
 	{
+		Gnode_setLabel(gnode, g);
 		nviz = (struct VizNode *)aggetrec(gnode, "Node", FALSE);
 		if (nviz == NULL)
 		{
@@ -1467,8 +1603,21 @@ void drawGraph(struct Graph *g)
 	gvRender(gvc, gviz, "png", stdout);
 	gvFreeLayout(gvc, gviz);
 
-	gvFreeContext(gvc);
 	agclose(gviz);
+	gvFreeContext(gvc);
+}
+
+void graph_clean(struct Graph *g)
+{
+	list_free(g->contsTable, (void (*)(void *))symbolTableEl_free);
+	list_free(g->uncontsTable, (void (*)(void *))symbolTableEl_free);
+	list_free(g->lastCreated, NULL);
+	list_free(g->nodesP[0], NULL);
+	list_free(g->nodesP[1], NULL);
+	list_free(g->nodes, (void (*)(void *))node_free);
+	list_free(g->states, (void (*)(void *))state_free);
+	free(g->contsChars);
+	free(g->uncontsChars);
 }
 
 int main(int argc, char *argv[])
@@ -1499,7 +1648,9 @@ int main(int argc, char *argv[])
 	computeW0(&g, W);
 	minimize(&g);
 	drawGraph(&g);
-	
+
+	graph_clean(&g);
+
 	return EXIT_SUCCESS;
 }
 
