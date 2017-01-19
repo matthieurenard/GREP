@@ -53,7 +53,7 @@ typedef struct Node
 		} p0;
 		struct
 		{
-			struct List *succsCont;
+			struct Node **succsCont;
 			struct List *succsUncont;
 			struct Node *predStop;
 		} p1;
@@ -90,6 +90,8 @@ struct Graph
 	struct List *nodes;
 	struct List *nodesP[2];
 	struct List *lastCreated;
+	unsigned int nbConts;
+	unsigned int nbUnconts;
 };
 
 static int cmpSymbolChar(const void *val, const void *pel);
@@ -119,6 +121,7 @@ static struct Edge *edge_new(enum EdgeType type, struct Node *n);
 static void edge_free(struct Edge *e);
 static void createChars(const struct List *l, struct List **psymbolTable, char 
 		**pchars);
+static unsigned int contIndex(const struct Graph *g, char c);
 static void node_setWinning(void *dummy, void *pn);
 static void computeStrat(void *dummy, Node *n);
 static void addEdgesToLast(struct Graph *g);
@@ -274,6 +277,7 @@ static char *computeRealWord(const struct Graph *g, const char *word)
 static struct Node *node_new(const struct Graph *g, const struct State *q, const 
 		char *word, int owner)
 {
+	int i;
 	struct Node *n = malloc(sizeof *n);
 
 	if (n == NULL)
@@ -304,7 +308,9 @@ static struct Node *node_new(const struct Graph *g, const struct State *q, const
 	else
 	{
 		n->p1.predStop = NULL;
-		n->p1.succsCont = list_new();
+		n->p1.succsCont = malloc(g->nbConts * sizeof *(n->p1.succsCont));
+		for (i = 0 ; i < g->nbConts ; i++)
+			n->p1.succsCont[i] = NULL;
 		n->p1.succsUncont = list_new();
 	}
 
@@ -428,7 +434,7 @@ static void node_free(Node *n)
 	}
 	else
 	{
-		list_free(n->p1.succsCont, NULL);
+		free(n->p1.succsCont);
 		list_free(n->p1.succsUncont, NULL);
 	}
 
@@ -515,6 +521,19 @@ static void createChars(const struct List *l, struct List **psymbolTable, char *
 	listIterator_release(it);
 }
 
+static unsigned int contIndex(const struct Graph *g, char c)
+{
+	int i;
+
+	for (i = 0 ; i < g->nbConts ; i++)
+	{
+		if (g->contsChars[i] == c)
+			return i;
+	}
+
+	return -1;
+}
+
 static void node_setWinning(void *dummy, void *pn)
 {
 	Node *n = pn;
@@ -592,7 +611,7 @@ static void addEdgesToLast(struct Graph *g)
 				}
 				n->word[strlen(n->word)] = c;
 				/* !! dest --> n !! */
-				list_add(dest->p1.succsCont, n);
+				dest->p1.succsCont[contIndex(g, c)] = n;
 				n->p0.predContRcvd = dest;
 				list_add(dest->edges, edge_new(CONTRCVD, n));
 			}
@@ -634,7 +653,8 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 		*U, struct List *nodes)
 {
 	int stable = 0;
-	struct ListIterator *it;
+	struct ListIterator *it, *it2;
+	int i;
 
 	set_reset(ret);
 	set_copy(ret, U, NULL);
@@ -651,6 +671,20 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 				continue;
 			if (n->owner == player)
 			{
+				for (it2 = listIterator_first(n->edges) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct Edge *e = listIterator_val(it2);
+					if (listIn(nodes, e->succ) && set_in(ret, e->succ))
+					{
+						stable = 0;
+						set_add(ret, n);
+						break;
+					}
+				}
+				listIterator_release(it2);
+				/*
 				if (n->owner == 0)
 				{
 					if ((listIn(nodes, n->p0.succEmit) && set_in(ret, 
@@ -664,22 +698,19 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 				}
 				else
 				{
-					int i;
 					struct ListIterator *it2;
 
-					for (it2 = listIterator_first(n->p1.succsCont) ; 
-							listIterator_hasNext(it2) ; it2 = 
-							listIterator_next(it2))
+					for (i = 0 ; i < g->nbConts ; i++)
 					{
-						Node *succ = listIterator_val(it2);
-						if (listIn(nodes, succ) && set_in(ret, succ))
+						Node *succ = n->p1.succsCont[i];
+						if (succ != NULL && listIn(nodes, succ) && set_in(ret, 
+									succ))
 						{
 							stable = 0;
 							set_add(ret, n);
 							break;
 						}
 					}
-					listIterator_release(it2);
 
 					if (stable)
 					{
@@ -688,8 +719,7 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 								listIterator_next(it2))
 						{
 							Node *succ = listIterator_val(it2);
-							if (listIn(nodes, succ) && 
-									set_in(ret, succ))
+							if (listIn(nodes, succ) && set_in(ret, succ))
 							{
 								stable = 0;
 								set_add(ret, n);
@@ -699,10 +729,23 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 						listIterator_release(it2);
 					}
 				}
+				*/
 			}
-			/* n->owner != owner */
+			/* n->owner != player */
 			else
 			{
+				int ok = 1;
+
+				for (it2 = listIterator_first(n->edges) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct Edge *e = listIterator_val(it2);
+					if (listIn(nodes, e->succ) && !set_in(ret, e->succ))
+						ok = 0;
+				}
+				listIterator_release(it2);
+				/*
 				if (n->owner == 0)
 				{
 					if ((n->word[0] == '\0' ||
@@ -719,21 +762,17 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 				else
 				{
 					int ok = 1;
-					int i;
-					struct ListIterator *it2;
 
-					for (it2 = listIterator_first(n->p1.succsCont) ; 
-							listIterator_hasNext(it2) ; it2 = 
-							listIterator_next(it2))
+					for (i = 0 ; i < g->nbConts ; i++)
 					{
-						Node *succ = listIterator_val(it2);
-						if (listIn(nodes, succ) && !set_in(ret, succ))
+						Node *succ = n->p1.succsCont[i];
+						if (succ != NULL && listIn(nodes, succ) && !set_in(ret, 
+									succ))
 						{
 							ok = 0;
 							break;
 						}
 					}
-					listIterator_release(it2);
 					if (ok)
 					{
 						for (it2 = listIterator_first(n->p1.succsUncont) ; 
@@ -741,19 +780,21 @@ static void attr(struct Set *ret, struct Graph *g, int player, const struct Set
 								listIterator_next(it2))
 						{
 							Node *succ = listIterator_val(it2);
-							if (listIn(nodes, succ) && !set_in(ret, succ))
+							if (succ != NULL && listIn(nodes, succ) && 
+									!set_in(ret, succ))
 							{
 								ok = 0;
 								break;
 							}
 						}
 						listIterator_release(it2);
-						if (ok)
-						{
-							stable = 0;
-							set_add(ret, n);
-						}
 					}
+				}
+			*/
+				if (ok)
+				{
+					stable = 0;
+					set_add(ret, n);
 				}
 			}
 		}
@@ -823,6 +864,7 @@ static void minimize(struct Graph *g)
 	struct Set *necessary = set_empty(NULL);
 	struct ListIterator *it;
 	struct Edge *e, searchEdge;
+	int i;
 
 	for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
 			= listIterator_next(it))
@@ -1253,9 +1295,8 @@ static void addNodes(struct Graph *g)
 				= listIterator_next(it))
 		{
 			struct Node *src = listIterator_val(it);
-			int i, nSuccs = strlen(g->contsChars);
 			
-			for (i = 0 ; i < nSuccs ; i++)
+			for (i = 0 ; i < g->nbConts ; i++)
 			{
 				n = node_nextCont(g, src, g->contsChars[i]);
 				list_add(g->nodes, n);
@@ -1290,15 +1331,10 @@ static void addNodes(struct Graph *g)
 					else
 					{
 						struct ListIterator *it2;
-						for (it2 = 
-								listIterator_first(n->p0.predContRcvd->p1.succsCont) 
-								; listIterator_hasNext(it2) ; it2 = 
-								listIterator_next(it2))
+						for (i = 0 ; i < g->nbConts ; i++)
 						{
-							Node *brother = listIterator_val(it2);
-							Node *prevBrother = 
-								list_search(prev->p0.predContRcvd->p1.succsCont, 
-										brother, cmpLastBufferChar);
+							Node *brother = n->p0.predContRcvd->p1.succsCont[i];
+							Node *prevBrother = prev->p0.predContRcvd->p1.succsCont[i];
 							if (brother->isWinning != prevBrother->isWinning || 
 									brother->p0.strat != prevBrother->p0.strat)
 							{
@@ -1306,7 +1342,6 @@ static void addNodes(struct Graph *g)
 								break;
 							}
 						}
-						listIterator_release(it2);
 
 					}
 					if (changed)
@@ -1436,6 +1471,8 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	g->nodesP[0] = list_new();
 	g->nodesP[1] = list_new();
 	g->lastCreated = list_new();
+	g->nbConts = parser_getNbConts();
+	g->nbUnconts = parser_getNbUnconts();
 	createChars(pconts, &(g->contsTable), &(g->contsChars));
 	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars));
 	createStates(g, pstates, pedges);
