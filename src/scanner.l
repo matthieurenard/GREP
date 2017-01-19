@@ -2,7 +2,7 @@
 	#include <stdio.h>
 	#include <string.h>
 
-	#include "y.tab.h"
+	#include "parser.h"
 
 	static int line = 1;
 	static int col = 1;
