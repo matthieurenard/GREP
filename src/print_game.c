@@ -21,7 +21,7 @@ static char *nodeName(const struct Node *n)
 {
 	int size = 7; /* = strlen("(, , 0)") */
 	char *name;
-	char *constraints;
+	const char *constraints;
 
 	constraints = node_getConstraints(n);
 

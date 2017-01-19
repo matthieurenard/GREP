@@ -84,7 +84,7 @@ typedef struct Node
 	const struct State *q;
 	const struct StringArray *sa;
 	struct Dbmw *dbm;
-	struct Graph *g;
+	const struct Graph *g;
 	char *realWord;
 	int owner;
 	int meta;
@@ -170,6 +170,7 @@ struct PrivateEvent
 	enum ContType type;
 };
 
+struct Clock **clocks;
 
 static int cmpSymbolChar(const void *val, const void *pel);
 static int cmpSymbolLabel(const void *val, const void *pel);
@@ -216,7 +217,7 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *, const stru
 static void stateEdge_free(struct StateEdge *);
 static struct Edge *edge_new(enum EdgeType type, struct Node *n);
 static void edge_free(struct Edge *e);
-static struct Zone *zone_new(const struct State *, const struct Dbmw *);
+static struct Zone *zone_new(const struct State *, struct Dbmw *);
 static struct Zone *zone_newcp(const struct Zone *);
 static int zone_areEqual(const struct Zone *, const struct Zone *);
 static void zone_free(struct Zone *);
@@ -415,6 +416,7 @@ static struct Node *node_new(const struct Graph *g, const struct State *q, const
 	n->realWord = computeRealWord(g, sa->s);
 	n->edges = list_new();
 	n->userData = NULL;
+	n->g = g;
 	if (n->owner == 0)
 	{
 		n->p0.strat = STRAT_DONTEMIT;
@@ -682,7 +684,7 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 
 	ret->resets = list_new();
 	ret->to = s;
-	ret->dbm = dbmw_new(a->nbClocks + 1);
+	ret->dbm = dbmw_new(a->nbClocks);
 
 	for (it = listIterator_first(constraints) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
@@ -695,7 +697,7 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 
 		clock = NULL;
 
-		for (i = 0 ; i < a->nbClocks ; i++)
+		for (i = 1 ; i < a->nbClocks ; i++)
 		{
 			if (clock_getId(a->clocks[i]) == pclockId)
 			{
@@ -759,7 +761,7 @@ static void edge_free(struct Edge *e)
 	free(e);
 }
 
-static struct Zone *zone_new(const struct State *s, const struct Dbmw *dbm)
+static struct Zone *zone_new(const struct State *s, struct Dbmw *dbm)
 {
 	struct Zone *ret = malloc(sizeof *ret);
 
@@ -769,7 +771,7 @@ static struct Zone *zone_new(const struct State *s, const struct Dbmw *dbm)
 		exit(EXIT_FAILURE);
 	}
 
-	ret->dbm = dbmw_newcp(dbm);
+	ret->dbm = dbm;
 	ret->s = s;
 
 	ret->timeSucc = NULL;
@@ -781,7 +783,7 @@ static struct Zone *zone_new(const struct State *s, const struct Dbmw *dbm)
 
 static struct Zone *zone_newcp(const struct Zone *z)
 {
-	return zone_new(z->s, z->dbm);
+	return zone_new(z->s, dbmw_newcp(z->dbm));
 }
 
 static int zone_areEqual(const struct Zone *z1, const struct Zone *z2)
@@ -1374,7 +1376,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 	}
 	listIterator_release(it);
 
-	a->nbClocks = list_size(clocks);
+	a->nbClocks = list_size(clocks) + 1;
 	a->clocks = malloc(a->nbClocks * sizeof *(a->clocks));
 	if (a->clocks == NULL)
 	{
@@ -1382,11 +1384,12 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 		exit(EXIT_FAILURE);
 	}
 
-	for (it = listIterator_first(clocks), i = 0 ; listIterator_hasNext(it) ; it 
+	a->clocks[0] = clock_new(-1, 0, "0");
+	for (it = listIterator_first(clocks), i = 1 ; listIterator_hasNext(it) ; it 
 			= listIterator_next(it), i++)
 	{
 		struct ParserClock *pclock = listIterator_val(it);
-		a->clocks[i] = clock_new(parserClock_getId(pclock), i + 1, 
+		a->clocks[i] = clock_new(parserClock_getId(pclock), i, 
 				parserClock_getName(pclock));
 	}
 	listIterator_release(it);
@@ -1500,7 +1503,7 @@ void timedAutomaton_free(struct TimedAutomaton *a)
 		}
 		state_free(&(a->states[i]));
 	}
-	for (i = 0 ; i < a->nbClocks ; i++)
+	for (i = 1 ; i < a->nbClocks ; i++)
 	{
 		clock_free(a->clocks[i]);
 	}
@@ -1808,7 +1811,7 @@ struct List *splitZones2(const struct Zone *z0, const struct Zone *z1)
 	int i;
 	struct ListIterator *it;
 
-	list_add(dbms, z0->dbm);
+	list_add(dbms, dbmw_newcp(z0->dbm));
 	for (i = 0 ; i < 256 ; i++)
 	{
 		if (z0->s->contSuccs[i] != NULL)
@@ -1878,12 +1881,40 @@ struct List *splitZones2(const struct Zone *z0, const struct Zone *z1)
 		list_add(dbms, dbmw_upTo(z0->dbm, z1->dbm));
 	}
 
+	fprintf(stderr, "Partitioning zones {");
+	for (it = listIterator_first(dbms) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Dbmw *zr = listIterator_val(it);
+		dbmw_print(stderr, zr, clocks);
+		fprintf(stderr, ", ");
+	}
+	listIterator_release(it);
+	fprintf(stderr, "}\n");
+
 	ret = dbmw_partition(dbms);
 	list_free(dbms, (void (*)(void *))dbmw_free);
+
+	fprintf(stderr, "Splitting zones (%s, ", z0->s->name);
+	dbmw_print(stderr, z0->dbm, clocks);
+	fprintf(stderr, ") and (%s, ", z1->s->name);
+	dbmw_print(stderr, z1->dbm, clocks);
+	fprintf(stderr, "). Result = {");
+	for (it = listIterator_first(ret) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Dbmw *zr = listIterator_val(it);
+		dbmw_print(stderr, zr, clocks);
+		fprintf(stderr, ", ");
+	}
+	listIterator_release(it);
+	fprintf(stderr, "}\n");
+
 
 	return ret;
 }
 
+/* TODO BUG : first parameter modified during execution of the function */
 struct List *splitZones(const struct Zone *z, const struct List *rho)
 {
 	struct ListIterator *it;
@@ -1901,7 +1932,7 @@ struct List *splitZones(const struct Zone *z, const struct List *rho)
 		for (it2 = listIterator_first(part) ; listIterator_hasNext(it2) ; it2 = 
 				listIterator_next(it2))
 		{
-			struct Zone *z2 = listIterator_val(it2);
+			struct Dbmw *z2 = listIterator_val(it2);
 			list_add(splits, z2);
 		}
 		listIterator_release(it2);
@@ -1918,6 +1949,9 @@ struct List *splitZones(const struct Zone *z, const struct List *rho)
 		struct Dbmw *dbm = listIterator_val(it);
 		list_add(ret, zone_new(z->s, dbm));
 	}
+	listIterator_release(it);
+
+	list_free(partition, NULL);
 
 	return ret;
 }
@@ -2112,9 +2146,11 @@ void computeZoneGraph(struct Graph *g)
 	struct Zone *X, *z;
 	int i, ok;
 
+	fprintf(stderr, "BEGIN computeZoneGraph\n");
+
 	for (i = 0 ; i < g->a->nbStates ; i++)
 	{
-		struct Zone *z = zone_new(&(g->a->states[i]), dbmw_new(g->a->nbClocks));
+		z = zone_new(&(g->a->states[i]), dbmw_new(g->a->nbClocks));
 		list_add(rho, z);
 		if (g->a->states[i].isInitial)
 			list_add(alpha, zone_newcp(z));
@@ -2123,6 +2159,7 @@ void computeZoneGraph(struct Graph *g)
 	ok = 1;
 	while (ok)
 	{
+		fprintf(stderr, "alpha = {\n");
 		for (it = listIterator_first(alpha) ; listIterator_hasNext(it) ; it 
 				= listIterator_next(it))
 		{
@@ -2132,17 +2169,37 @@ void computeZoneGraph(struct Graph *g)
 					NULL)
 			{
 				X = z;
+				fprintf(stderr, "(%s, %s) not in sigma\n", z->s->name, dbmw_sprint(z->dbm, 
+							g->a->clocks));
 				break;
 			}
+			fprintf(stderr, "(%s, %s)\n", z->s->name, dbmw_sprint(z->dbm, 
+						g->a->clocks));
 		}
 		listIterator_release(it);
+
+		fprintf(stderr, "}\n");
+
+#if 0
+		fprintf(stderr, "sigma = {\n");
+		for (it = listIterator_first(sigma) ; listIterator_hasNext(it) ; it = listIterator_next(it))
+		{
+			z = listIterator_val(it);
+			fprintf(stderr, "(%s, %s)\n", z->s->name, dbmw_sprint(z->dbm, g->a->clocks));
+		}
+		listIterator_release(it);
+		fprintf(stderr, "}\n");
+#endif
 
 		alpha1 = splitZones(X, rho);
 		if (list_size(alpha1) == 1)
 		{
 			struct List *posts;
 
-			list_add(sigma, zone_newcp(X));
+			if (list_search(sigma, X, (int (*)(const void *, const void 
+								*))zone_areEqual) == NULL)
+				list_add(sigma, zone_newcp(X));
+
 
 			posts = post(X, rho);
 
@@ -2150,11 +2207,14 @@ void computeZoneGraph(struct Graph *g)
 					= listIterator_next(it))
 			{
 				z = listIterator_val(it);
-				list_add(alpha, z);
+				if (list_search(alpha, z, (int (*)(const void *, const void 
+									*))zone_areEqual) == NULL)
+					list_add(alpha, z);
 			}
 			listIterator_release(it);
 
 			list_free(posts, NULL);
+
 			list_free(alpha1, (void (*)(void *))zone_free);
 		}
 		else
@@ -2167,7 +2227,9 @@ void computeZoneGraph(struct Graph *g)
 					= listIterator_next(it))
 			{
 				struct Zone *Y = listIterator_val(it);
-				if (Y->s->isInitial && dbmw_containsZero(Y->dbm))
+				if (Y->s->isInitial && dbmw_containsZero(Y->dbm) &&
+						list_search(alpha, Y, (int (*)(const void *, const void 
+									*))zone_areEqual))
 				{
 					list_add(alpha, zone_newcp(Y));
 				}
@@ -2184,6 +2246,7 @@ void computeZoneGraph(struct Graph *g)
 				if (z1 != NULL)
 				{
 					list_remove(sigma, z1);
+					zone_free(z1);
 				}
 			}
 			listIterator_release(it);
@@ -2196,7 +2259,9 @@ void computeZoneGraph(struct Graph *g)
 					= listIterator_next(it))
 			{
 				z = listIterator_val(it);
-				list_add(rho, zone_newcp(z));
+				if (list_search(rho, z, (int (*)(const void *, const void 
+									*))zone_areEqual) == NULL)
+					list_add(rho, zone_newcp(z));
 			}
 			listIterator_release(it);
 			
@@ -2225,9 +2290,12 @@ void computeZoneGraph(struct Graph *g)
 	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
 	{
+		struct StringArray *sa = stringArray_new(g->nbStates);
 		z = listIterator_val(it);
-		list_add(g->nodes, node_new(g, z->s, z->dbm, NULL, 0));
+		list_add(g->nodes, node_new(g, z->s, z->dbm, sa, 0));
 	}
+
+	fprintf(stderr, "END computeZoneGraph\n");
 }
 
 struct Graph *graph_newFromAutomaton(const char *filename)
@@ -2267,6 +2335,7 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars));
 	g->a = timedAutomaton_new(g->contsTable, g->uncontsTable, pstates, pclocks, 
 			pedges);
+	clocks = g->a->clocks;
 	computeZoneGraph(g);
 	/*
 	g->baseNodes = malloc(g->nbStates * sizeof *(g->baseNodes));

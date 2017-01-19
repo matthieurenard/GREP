@@ -12,6 +12,7 @@
 
 #include "clock.h"
 
+extern struct Clock **clocks;
 
 struct Dbmw
 {
@@ -232,6 +233,8 @@ struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 			constraint = dbm_negConstraint(constraint);
 			dbm_constrainC(Ztmp->dbm, Ztmp->dim, constraint);
 			dbmw_intersection(Ztmp, Z0);
+			constraint = dbm_constraint2(i, j, dbm_raw2bound(Ztmp->dbm[i * n + 
+						j]), dbm_rawIsStrict(Ztmp->dbm[i * n + j]));
 
 			/* Zprev is composed of previous Ztmp, thus it should be OK to do 
 			 * this (Zprev[i][j] should be inf) */
@@ -239,22 +242,24 @@ struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 			{
 				dbmw_copy(Z, Zprev);
 				if (dbm_constrainC(Z->dbm, n, constraint))
+					dbm_constrainC(Zprev->dbm, n, constraint);
+				else
 				{
-					struct Dbmw *rem = list_search(ret, Zprev, (int (*)(const 
-									void *, const void *))dbmw_areEqual);
-					list_remove(ret, rem);
-					dbmw_free(rem);
-					dbmw_copy(Ztmp, Z);
+					Zprev = Ztmp;
+					list_add(ret, Zprev);
+					Ztmp = dbmw_new(n);
 				}
 			}
-			list_add(ret, Ztmp);
-
-			/* If Zprev is NULL, error */
-			if (!dbmw_areEqual(Ztmp, Zprev))
-				dbmw_copy(Zprev, Ztmp);
-			Ztmp = dbmw_new(n);
+			else
+			{
+				Zprev = Ztmp;
+				list_add(ret, Zprev);
+				Ztmp = dbmw_new(n);
+			}
 		}
 	}
+
+	return ret;
 }
 
 /**
@@ -303,14 +308,14 @@ struct List *dbmw_partition2(const struct Dbmw *Z0, const struct Dbmw *Z1)
  * @param list of zones (Zi)
  * @ret list of zones (Z'i)
  */
-struct List *dbmw_partition(const struct List *Zi)
+struct List *dbmw_partition(const struct List *zones)
 {
 	struct ListIterator *it;
 	int i, changed;
 	struct Fifo *wait = fifo_empty();
 	struct List *ret = list_new();
 
-	for (it = listIterator_first(Zi), i = 0 ; listIterator_hasNext(it) ; it = 
+	for (it = listIterator_first(zones), i = 0 ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it), i++)
 	{
 		struct Dbmw *dbm = listIterator_val(it);
@@ -326,6 +331,8 @@ struct List *dbmw_partition(const struct List *Zi)
 		struct Dbmw *Z = fifo_dequeue(wait);
 		struct Dbmw *Zi;
 
+		fprintf(stderr, "Z = %s\n", dbmw_sprint(Z, clocks));
+
 		changed = 0;
 
 		for (it = listIterator_first(ret) ; !changed && listIterator_hasNext(it) 
@@ -337,7 +344,11 @@ struct List *dbmw_partition(const struct List *Zi)
 		}
 		listIterator_release(it);
 
-		if (!changed)
+		if (changed && dbmw_areEqual(Z, Zi))
+			continue;
+
+		if (!changed && list_search(ret, Z, (int (*)(const void *, const void 
+							*))dbmw_areEqual) == NULL)
 			list_add(ret, Z);
 		else
 		{
@@ -462,12 +473,13 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 {
 	int i, j;
 	int first = 1;
-	char *s = malloc(512);
+	char *s0 = malloc(512);
+	char *s = s0;
 
 	for (i = 0 ; i < 512 ; i++)
 		s[i] = '\0';
 
-	sprintf(s, "{");
+	s += sprintf(s, "{");
 
 	for (i = 1 ; i < d->dim ; i++)
 	{
@@ -480,13 +492,16 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 		if (bound != 0)
 		{
 			if (!first)
-				sprintf(s, ",");
+				s += sprintf(s, ",");
 			else
 				first = 0;
 
-			sprintf(s, "%s ", clock_getName(clocks[i]));
-			sprintf(s, ">%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-			sprintf(s, "%d", -bound);
+			s += sprintf(s, "%s ", clock_getName(clocks[i]));
+			s += sprintf(s, ">%s ", dbm_rawIsWeak(constraint) ? "=" : "");
+			if (bound == -dbm_INFINITY)
+				s += sprintf(s, "%s", "Inf");
+			else
+				s += sprintf(s, "%d", -bound);
 		}
 		constraint = d->dbm[i * d->dim]; // d[i,0]
 		bound = dbm_raw2bound(constraint);
@@ -494,13 +509,13 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 		if (bound != dbm_INFINITY)
 		{
 			if (!first)
-				sprintf(s, ",");
+				s += sprintf(s, ",");
 			else
 				first = 0;
 
-			sprintf(s, "%s ", clock_getName(clocks[i]));
-			sprintf(s, "<%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-			sprintf(s, "%d", bound);
+			s += sprintf(s, "%s ", clock_getName(clocks[i]));
+			s += sprintf(s, "<%s ", dbm_rawIsWeak(constraint) ? "=" : "");
+			s += sprintf(s, "%d", bound);
 		}
 
 		for (j = i + 1 ; j < d->dim ; j++)
@@ -511,13 +526,14 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 			if (bound != dbm_INFINITY)
 			{
 				if (!first)
-					sprintf(s, ",");
+					s += sprintf(s, ",");
 				else
 					first = 0;
 
-				sprintf(s, "%s - %s ", clock_getName(clocks[j]), clock_getName(clocks[i]));
-				sprintf(s, ">%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-				sprintf(s, "%d", -bound);
+				s += sprintf(s, "%s - %s ", clock_getName(clocks[j]), 
+						clock_getName(clocks[i]));
+				s += sprintf(s, ">%s ", dbm_rawIsWeak(constraint) ? "=" : "");
+				s += sprintf(s, "%d", -bound);
 			}
 
 			constraint = d->dbm[j * d->dim + i]; // d[j,i]
@@ -526,17 +542,20 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 			if (bound != dbm_INFINITY)
 			{
 				if (!first)
-					sprintf(s, ",");
+					s += sprintf(s, ",");
 				else
 					first = 0;
 
-				sprintf(s, "%s - %s ", clock_getName(clocks[j]), clock_getName(clocks[i]));
-				sprintf(s, "<%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-				sprintf(s, "%d", bound);
+				s += sprintf(s, "%s - %s ", clock_getName(clocks[j]), 
+						clock_getName(clocks[i]));
+				s += sprintf(s, "<%s ", dbm_rawIsWeak(constraint) ? "=" : "");
+				s += sprintf(s, "%d", bound);
 			}
 		}
 	}
-	sprintf(s, "}");
+	s += sprintf(s, "}");
+
+	return s0;
 }
 
 void dbmw_free(struct Dbmw *d)
