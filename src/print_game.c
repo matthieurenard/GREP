@@ -23,6 +23,9 @@ static char *nodeName(const struct Node *n)
 
 	size += strlen(node_stateLabel(n));
 	size += strlen(node_word(n));
+
+	if (node_word(n)[0] == '\0')
+		size++;
 	
 	name = malloc(size + 1);
 	if (name == NULL)
@@ -31,8 +34,11 @@ static char *nodeName(const struct Node *n)
 		exit(EXIT_FAILURE);
 	}
 
-	sprintf(name, "(%s, %s, %d)", node_stateLabel(n), node_word(n), 
-			node_owner(n));
+	if (node_word(n)[0] == '\0')
+		sprintf(name, "(%s, -, %d)", node_stateLabel(n), node_owner(n));
+	else
+		sprintf(name, "(%s, %s, %d)", node_stateLabel(n), node_word(n), 
+				node_owner(n));
 
 	return name;
 }
