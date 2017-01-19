@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.69])
-AC_INIT([enfrocer_game], [1.0], [mrenard@labri.fr])
+AC_INIT([enforcer_game], [1.0], [mrenard@labri.fr])
 AC_CONFIG_AUX_DIR([autotools])
 AM_INIT_AUTOMAKE([subdir-objects -Wall -Werror foreign])
 AC_CONFIG_SRCDIR([src/print_game.c])
