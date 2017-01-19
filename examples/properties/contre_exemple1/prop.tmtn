@@ -1,0 +1,25 @@
+automaton
+{
+	cont {c}
+	uncont {u}
+
+	nodes
+	{
+		q0[accepting, initial];
+		q1;
+		q2[accepting];
+	}
+
+	clocks {}
+
+	edges
+	{
+		q0 ->{c}{}{} q0;
+		q0 ->{u}{}{} q1;
+		q1 ->{u}{}{} q1;
+		q1 ->{c}{}{} q2;
+		q2 ->{c}{}{} q2;
+		q2 ->{u}{}{} q2;
+	}
+}
+
