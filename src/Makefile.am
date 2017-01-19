@@ -9,6 +9,10 @@ print_game_CPPFLAGS = -I$(srcdir)/../include
 print_game_SOURCES = print_game.c \
 					 game_graph.c \
 					 game_graph.h \
+					 clock.c \
+					 dbmutils.c \
 					 parser.y \
-					 scanner.l
+					 scanner.l \
+					 $(srcdir)/../include/clock.h \
+					 $(srcdir)/../include/dbmutils.h
 

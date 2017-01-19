@@ -8,7 +8,7 @@ struct Node;
 struct Graph;
 struct Enforcer;
 
-enum EdgeType {EMIT, STOPEMIT, CONTRCVD, UNCONTRCVD};
+enum EdgeType {EMIT, STOPEMIT, CONTRCVD, UNCONTRCVD, TIMELPSD};
 enum Strat {STRAT_EMIT, STRAT_DONTEMIT};
 
 struct Edge
