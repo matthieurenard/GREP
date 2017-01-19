@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <getopt.h>
 
 #include <string.h>
 
@@ -85,7 +86,7 @@ static char *edgeName(const struct Edge *e, int i)
 	return name;
 }
 
-void drawGraph(struct Graph *g)
+void drawGraph(struct Graph *g, FILE *outFile)
 {
 	Agraph_t *gviz;
 	GVC_t *gvc;
@@ -104,6 +105,8 @@ void drawGraph(struct Graph *g)
 	colors[CONTRCVD] = "orange";
 
 	gviz = agopen("G", Agdirected, NULL);
+	agattr(gviz, AGRAPH, "overlap", "false");
+	//agattr(gviz, AGRAPH, "ratio", "fill");
 	agattr(gviz, AGNODE, "color", "black");
 	agattr(gviz, AGNODE, "shape", "ellipse");
 	agattr(gviz, AGNODE, "peripheries", "1");
@@ -119,10 +122,13 @@ void drawGraph(struct Graph *g)
 		if (node_isAccepting(n))
 			agset(gnode, "peripheries", "2");
 		if (node_isInitial(n))
+		{
 			agset(gnode, "shape", "square");
+			//agattr(gviz, AGRAPH, "root", agnameof(gnode));
+		}
 		if (node_isWinning(n))
 			agset(gnode, "color", "green");
-		if (node_owner(n) == 0 && node_strat(n) == EMIT)
+		if (node_owner(n) == 0 && node_strat(n) == STRAT_EMIT)
 			agset(gnode, "color", "blue");
 		nviz = agbindrec(gnode, "Node", sizeof *nviz, FALSE);
 		nviz->n = n;
@@ -155,11 +161,21 @@ void drawGraph(struct Graph *g)
 	}
 	gvc = gvContext();
 	gvLayout(gvc, gviz, "dot");
-	gvRender(gvc, gviz, "png", stdout);
+	gvRender(gvc, gviz, "png", outFile);
 	gvFreeLayout(gvc, gviz);
 
 	agclose(gviz);
 	gvFreeContext(gvc);
+}
+
+void print_usage(FILE *out, char *progName)
+{
+	fprintf(out, "Usage : %s [options] <filename>\n", progName);
+	fprintf(out, "where <filename> is an automaton file.\n");
+	fprintf(out, "List of possible options:\n"
+			"-d, --drawgraph=FILE    print the game graph in FILE\n"
+			"-l, --log-file=FILE     use FILE as log file\n"
+		   );
 }
 
 int main(int argc, char *argv[])
@@ -168,19 +184,91 @@ int main(int argc, char *argv[])
 	char *filename;
 	int maxBufferSize;
 	struct ListIterator *it;
+	struct Enforcer *e;
+	char buffer[256];
+	char c;
+	int i, optionIndex;
+	FILE *logFile = stderr, *drawFile = NULL;
 
-	if (argc < 2)
+	struct option longOptions[] = 
 	{
-		fprintf(stderr, "Usage : %s <filename>\n", argv[0]);
-		fprintf(stderr, "Where <filename> is an automaton file\n");
+		{"draw-graph", required_argument, NULL, 'd'},
+		{"log-file", required_argument, NULL, 'l'},
+		{0, 0, 0, 0}
+	};
+
+	while ((c = getopt_long(argc, argv, "d:l:", longOptions, &optionIndex)) != -1)
+	{
+		if (c == 0)
+			c = longOptions[optionIndex].val;
+		switch (c)
+		{
+
+			case 'd':
+				drawFile = fopen(optarg, "w");
+				if (drawFile == NULL)
+				{
+					perror("fopen");
+					fprintf(stderr, "Impossible to open %s, graph will not be " 
+							"drawn.\n", optarg);
+				}
+			break;
+
+			case 'l':
+				logFile = fopen(optarg, "a");
+				if (logFile == NULL)
+				{
+					perror("fopen");
+					fprintf(stderr, "Impossible to open %s, log will be "
+							"redirected to stderr.\n", optarg);
+				}
+			break;
+
+			case '?':
+			break;
+
+			default:
+				fprintf(stderr, "getopt_long error.\n");
+			break;
+		}
+	}
+
+	if (optind >= argc)
+	{
+		print_usage(stderr, argv[0]);
 		exit(EXIT_FAILURE);
 	}
 
-	filename = argv[1];
+	filename = argv[optind];
 
 	g = graph_newFromAutomaton(filename);
-	drawGraph(g);
+	if (drawFile != NULL)
+		drawGraph(g, drawFile);
 
+	e = enforcer_new(g, logFile);
+
+	i = 0;
+	while ((c = getchar()) != EOF)
+	{
+		if (c == ' ' || c == '\n')
+		{
+			if (i != 0)
+			{
+				struct Event event;
+				buffer[i] = '\0';
+				event.label = buffer;
+				enforcer_eventRcvd(e, &event);
+				while (enforcer_getStrat(e) == STRAT_EMIT)
+					enforcer_emit(e);
+			}
+			i = 0;
+		}
+		else
+			buffer[i++] = c;
+	}
+
+
+	enforcer_free(e);
 	graph_free(g);
 
 	return EXIT_SUCCESS;

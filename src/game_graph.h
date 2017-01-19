@@ -2,8 +2,11 @@
 #define GAME_GRAPH_H
 
 #include <list.h>
+#include <stdio.h>
+
 struct Node;
 struct Graph;
+struct Enforcer;
 
 enum EdgeType {EMIT, STOPEMIT, CONTRCVD, UNCONTRCVD};
 enum Strat {STRAT_EMIT, STRAT_DONTEMIT};
@@ -12,6 +15,11 @@ struct Edge
 {
 	enum EdgeType type;
 	struct Node *succ;
+};
+
+struct Event
+{
+	const char *label;
 };
 
 struct Graph *graph_newFromAutomaton(const char *filename);
@@ -28,6 +36,12 @@ enum Strat node_strat(const struct Node *);
 void node_setData(struct Node *, void *);
 void *node_getData(const struct Node *);
 const struct List *node_edges(const struct Node *);
+
+struct Enforcer *enforcer_new(const struct Graph *, FILE *);
+enum Strat enforcer_getStrat(const struct Enforcer *);
+void enforcer_eventRcvd(struct Enforcer *, const struct Event *);
+void enforcer_emit(struct Enforcer *);
+void enforcer_free(struct Enforcer *);
 
 #endif
 
