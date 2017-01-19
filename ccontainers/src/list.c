@@ -136,7 +136,8 @@ unsigned int list_size(const struct List *l)
 	return l->size;
 }
 
-void *list_search(const struct List *l, void *val, int (*eq)(void *, void *))
+void *list_search(const struct List *l, const void *val,
+		int (*eq)(const void *, const void *))
 {
 	struct Element *e;
 
