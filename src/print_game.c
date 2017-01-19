@@ -305,8 +305,8 @@ void addEdges(struct Graph *g, int maxWordSize)
 			dest = list_search(g->nodes, &sn, cmpNode);
 			if (dest == NULL)
 			{
-				fprintf(stderr, "ERROR: cannot find node (%p, %s, %d) (1).\n", 
-						sn.q, sn.word, sn.owner);
+				fprintf(stderr, "ERROR: cannot find node (%s, %s, %d) (1).\n", 
+						sn.q->name, sn.word, sn.owner);
 				exit(EXIT_FAILURE);
 			}
 			n->p0.succStopEmit = dest;
@@ -347,8 +347,8 @@ void addEdges(struct Graph *g, int maxWordSize)
 					dest = list_search(g->nodes, &sn, cmpNode);
 					if (dest == NULL)
 					{
-						fprintf(stderr, "ERROR: cannot find node (%p, %s, " 
-								"%d) (2).\n", sn.q, sn.word, sn.owner);
+						fprintf(stderr, "ERROR: cannot find node (%s, %s, " 
+								"%d) (2).\n", sn.q->name, sn.word, sn.owner);
 						exit(EXIT_FAILURE);
 					}
 					n->p1.succsCont[i] = dest;
@@ -377,19 +377,11 @@ void addEdges(struct Graph *g, int maxWordSize)
 				{
 					sn.q = n->q->uncontsSuccs[(unsigned char)g->uncontsChars[i]];
 
-					if (sn.q == NULL)
-					{
-						fprintf(stderr, "ALALALA\n");
-						exit(EXIT_FAILURE);
-					}
-					else 
-						fprintf(stderr, "%p\n", sn.q);
-					fflush(stderr);
 					dest = list_search(g->nodes, &sn, cmpNode);
 					if (dest == NULL)
 					{
-						fprintf(stderr, "ERROR: cannot find node (%p, %s, " 
-								"%d) (3).\n", sn.q, sn.word, sn.owner);
+						fprintf(stderr, "ERROR: cannot find node (%s, %s, " 
+								"%d) (3).\n", sn.q->name, sn.word, sn.owner);
 						exit(EXIT_FAILURE);
 					}
 					n->p1.succsUncont[i] = dest;
@@ -467,7 +459,6 @@ void createStates(struct Graph *g, const struct List *states, const struct List
 				exit(EXIT_FAILURE);
 			}
 			from->contSuccs[(unsigned char)el->c] = to;
-			fprintf(stderr, "Adding edge %s ->{%c} %s\n", from->name, el->c, to->name);
 		}
 		else
 		{
@@ -478,7 +469,6 @@ void createStates(struct Graph *g, const struct List *states, const struct List
 				exit(EXIT_FAILURE);
 			}
 			from->uncontsSuccs[(unsigned char)el->c] = to;
-			fprintf(stderr, "Adding edge %s ->{%c} %s\n", from->name, el->c, to->name);
 		}
 	}
 	listIterator_release(it);
