@@ -1246,6 +1246,7 @@ void addNodes(struct Graph *g)
 	} while (changed);
 
 	list_free(newNodes, NULL);
+	set_free(W0);
 }
 
 void createStates(struct Graph *g, const struct List *states, const struct List 
@@ -1650,6 +1651,7 @@ int main(int argc, char *argv[])
 	drawGraph(&g);
 
 	graph_clean(&g);
+	set_free(W);
 
 	return EXIT_SUCCESS;
 }
