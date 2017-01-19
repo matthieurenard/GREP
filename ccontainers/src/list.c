@@ -119,6 +119,7 @@ struct List *list_remove(struct List *l, void *data)
 				l->tail = prev;
 			free(e);
 			l->size--;
+			break;
 		}
 	}
 
