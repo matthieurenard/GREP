@@ -12,14 +12,16 @@
 
 #define BUFFER_SIZE		256
 
+enum FileType {AUTOMATON_FILE, GRAPH_FILE, NONE_FILE};
 
 struct Args
 {
 	FILE *drawFile;
 	FILE *drawZoneFile;
 	FILE *logFile;
-	char *automatonFile;
-	unsigned int pollingTime;
+	char *saveFilename;
+	enum FileType fileType;
+	char *filename;
 };
 
 struct InputEvent
@@ -31,12 +33,14 @@ struct InputEvent
 
 void print_usage(FILE *out, char *progName)
 {
-	fprintf(out, "Usage : %s [options] <filename>\n", progName);
-	fprintf(out, "where <filename> is an automaton file.\n");
+	fprintf(out, "Usage : %s [options] (-a <automatonFile> | -g <graphFile>)\n", 
+			progName);
+	fprintf(out, "where <automatonFile> is an automaton file, or <graphFile> is" 
+			" a graph file (see -s option).\n");
 	fprintf(out, "List of possible options:\n"
 			"-d, --drawgraph=FILE    print the game graph in FILE\n"
 			"-l, --log-file=FILE     use FILE as log file\n"
-			"-p, --polling=TIME      update the enforcer every TIME ms\n"
+			"-s, --save-graph=FILE   save the graph to FILE (use it with -g)\n"
 		   );
 }
 
@@ -60,8 +64,9 @@ void initArgs(struct Args *args)
 {
 	args->drawFile = NULL;
 	args->drawZoneFile = NULL;
-	args->automatonFile = NULL;
-	args->pollingTime = 0;
+	args->saveFilename = NULL;
+	args->fileType = NONE_FILE;
+	args->filename = NULL;
 
 	args->logFile = stderr;
 }
@@ -75,24 +80,25 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 		{"draw-graph", required_argument, NULL, 'd'},
 		{"draw-zone-graph", required_argument, NULL, 'z'},
 		{"log-file", required_argument, NULL, 'l'},
-		{"polling", required_argument, NULL, 'p'},
+		{"automaton-file", required_argument, NULL, 'a'},
+		{"graph-file", required_argument, NULL, 'g'},
+		{"save-graph", required_argument, NULL, 's'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "d:z:l:", longOptions, &optionIndex)) != 
+	while ((c = getopt_long(argc, argv, "d:z:l:a:g:s:", longOptions, &optionIndex)) != 
 			-1)
 	{
 		if (c == 0)
 			c = longOptions[optionIndex].val;
 		switch (c)
 		{
-
 			case 'd':
 				args->drawFile = fopen(optarg, "w");
 				if (args->drawFile == NULL)
 				{
 					perror("fopen");
-					fprintf(stderr, "Impossible to open %s, graph will not be " 
+					fprintf(stderr, "Cannot open %s, graph will not be " 
 							"drawn.\n", optarg);
 				}
 			break;
@@ -102,7 +108,7 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 				if (args->drawZoneFile == NULL)
 				{
 					perror("fopen");
-					fprintf(stderr, "Impossible to open %s, zone graph will not" 
+					fprintf(stderr, "Cannot open %s, zone graph will not" 
 						" be drawn.\n", optarg);
 				}
 			break;	
@@ -112,13 +118,23 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 				if (args->logFile == NULL)
 				{
 					perror("fopen");
-					fprintf(stderr, "Impossible to open %s, log will be "
+					fprintf(stderr, "Cannot open %s, log will be "
 							"redirected to stderr.\n", optarg);
 				}
 			break;
 
-			case 'p':
-				args->pollingTime = atoi(optarg);
+			case 's':
+				args->saveFilename = optarg;
+			break;
+
+			case 'a':
+			case 'g':
+				if (c == 'a')
+					args->fileType = AUTOMATON_FILE;
+				else
+					args->fileType = GRAPH_FILE;
+				args->filename = optarg;
+			break;
 
 			case '?':
 			break;
@@ -129,13 +145,11 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 		}
 	}
 
-	if (optind >= argc)
+	if (args->fileType == NONE_FILE)
 	{
 		print_usage(stderr, argv[0]);
 		exit(EXIT_FAILURE);
 	}
-
-	args->automatonFile = argv[optind];
 
 	return 0;
 }
@@ -187,8 +201,6 @@ int main(int argc, char *argv[])
 	struct Args args;
 	struct Graph *g;
 	struct Enforcer *e;
-	fd_set rfds;
-	int i, quit = 0, pending = 0;
 	unsigned int nextDelay = 0, nextDate = 0, date = 0;
 	struct Fifo *events;
 	struct InputEvent *event = NULL;
@@ -196,7 +208,11 @@ int main(int argc, char *argv[])
 	initArgs(&args);
 	parseArgs(argc, argv, &args);
 
-	g = graph_newFromAutomaton(args.automatonFile);
+	if (args.fileType == AUTOMATON_FILE)
+		g = graph_newFromAutomaton(args.filename);
+	else if (args.fileType == GRAPH_FILE)
+		g = graph_load(args.filename);
+
 	if (args.drawFile != NULL)
 	{
 		drawGraph(g, args.drawFile);
@@ -206,6 +222,10 @@ int main(int argc, char *argv[])
 	{
 		drawZoneGraph(graph_getZoneGraph(g), args.drawZoneFile);
 		fclose(args.drawZoneFile);
+	}
+	if (args.saveFilename != NULL)
+	{
+		graph_save(g, args.saveFilename);
 	}
 
 	e = enforcer_new(g, args.logFile);
@@ -265,6 +285,7 @@ int main(int argc, char *argv[])
 
 	enforcer_free(e);
 	graph_free(g);
+	fifo_free(events);
 
 	if (args.logFile != stderr)
 		fclose(args.logFile);

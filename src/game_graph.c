@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <stdint.h>
+
 #include <list.h>
 #include <set.h>
 #include <fifo.h>
@@ -11,10 +13,12 @@
 
 #include "parser.h"
 #include "dbmutils.h"
+#include "serialize.h"
 
 #define EVENTSEP		""
 #define EVENTSEPSIZE	0	/* strlen(EVENTSEP) */
 #define NBSUCCS			256
+#define CANARY			0xdeadbeefdeadbeefUL
 
 
 enum ContType {CONTROLLABLE, UNCONTROLLABLE};
@@ -34,9 +38,10 @@ struct State
 	char *name;
 	int isInitial;
 	int isAccepting;
+	/* StateEdge[] */
 	struct List *contSuccs[NBSUCCS];
+	/* StateEdge[] */
 	struct List *uncontSuccs[NBSUCCS];
-	int isLastCreated;
 	unsigned int index;
 };
 
@@ -44,6 +49,7 @@ struct StateEdge
 {
 	const struct State *to;
 	struct Dbmw *dbm;
+	/* Clock[] */
 	struct List *resets;
 };
 
@@ -54,9 +60,13 @@ struct TimedAutomaton
 	unsigned int nbStates;
 	struct Clock **clocks;
 	unsigned int nbClocks;
+	/* SymbolTableEl[] */
 	const struct List *contsTable;
+	/* SymbolTableEl[] */
 	const struct List *uncontsTable;
+	/* --> Graph.contsEls */
 	const struct SymbolTableEl **contsEls;
+	/* --> Graph.uncontsEls */
 	const struct SymbolTableEl **uncontsEls;
 };
 
@@ -65,10 +75,13 @@ struct Zone
 	const struct State *s;
 	struct Dbmw *dbm;
 	struct Zone **contSuccs;
+	/* Clock *[] */
 	struct List **resetsConts;
 	struct Zone **uncontSuccs;
+	/* Clock *[] */
 	struct List **resetsUnconts;
 	struct Zone *timeSucc;
+	/* ZoneEdge[] */
 	struct List *edges;
 	unsigned int index;
 	const struct TimedAutomaton *a;
@@ -80,7 +93,9 @@ struct Zone
 struct ZoneGraph
 {
 	const struct TimedAutomaton *a;
+	/* Zone[] */
 	struct List *zones;
+	/* Zone *[] */
 	struct List **zonesS;
 	struct Zone *z0;
 	struct Zone *sinkZone;
@@ -105,7 +120,7 @@ struct StringArray
 typedef struct Node
 {
 	const struct Zone *z;
-	const struct StringArray *sa;
+	char *word;
 	const struct Graph *g;
 	char *realWord;
 	int owner;
@@ -114,9 +129,10 @@ typedef struct Node
 		struct
 		{
 			struct Node *succEmit;
-			struct Node *succEmitAll;
 			struct Node *succStopEmit;
+			/* Node *[] */
 			struct List *predsEmit;
+			/* Node *[] */
 			struct List *predsUncont;
 			struct Node *predContRcvd;
 			struct Node *predTime;
@@ -134,6 +150,8 @@ typedef struct Node
 	int isInitial;
 	int isWinning;
 	int isLeaf;
+	unsigned int index;
+	/* Edge *[] */
 	struct List *edges;
 	void *userData;
 } Node;
@@ -147,7 +165,9 @@ struct SearchNode
 
 struct Graph
 {
+	/* SymbolTableEl *[] */
 	struct List *contsTable;
+	/* SymbolTableEl *[] */
 	struct List *uncontsTable;
 	struct SymbolTableEl *contsEls[256];
 	struct SymbolTableEl *uncontsEls[256];
@@ -155,9 +175,10 @@ struct Graph
 	char *uncontsChars;
 	struct TimedAutomaton *a;
 	struct ZoneGraph *zoneGraph;
+	/* Node *[] */
 	struct List *nodes;
+	/* Node *[][2] */
 	struct List *nodesP[2];
-	struct List *lastCreated;
 	struct Node **baseNodes;
 	unsigned int nbNodes;
 	unsigned int nbConts;
@@ -193,141 +214,143 @@ struct PrivateEvent
 
 struct Clock **clocks;
 
-static int cmpSymbolChar(const void *val, const void *pel);
-static int cmpSymbolLabel(const void *val, const void *pel);
-static int cmpSymId(const void *val, const void *pel);
-static int cmpStateId(const void *val, const void *pState);
-static int cmpNode(const void *val, const void *pNode);
-static int cmpEdge(const void *pe1, const void *pe2);
-#if 0
-static int cmpLastBufferChar(const void *pNode1, const void *pNode2);
-#endif
-static int notSetIn(struct Set *s, void *el);
-static int eqPtr(const void *p1, const void *p2);
+/* Shortcuts functions for ccontainers */
 static int listIn(struct List *l, void *data);
 static void listAddNoDouble(struct List *l, void *data);
 static void removeSetFromList(struct List *l, const struct Set *s);
+
+/* Comparison functions used with list_search */
+static int cmpSymbolChar(const void *val, const void *pel);
+static int cmpSymbolLabel(const void *val, const void *pel);
+static int cmpSymId(const void *val, const void *pel);
+static int cmpEdge(const void *pe1, const void *pe2);
+static int cmpZoneIndex(const void *val, const void *pz);
+static int cmpNodeIndex(const void *val, const void *pn);
+static int eqPtr(const void *p1, const void *p2);
+
+/* To be used with set_applyToAll */
+static void node_setWinning(void *dummy, void *pn);
+static void node_computeStrat(void *dummy,void *pn);
+
+/*SymbolTableEl */
+static struct SymbolTableEl *symbolTableEl_new(char, const char *, unsigned 
+		int);
+static void symbolTableEl_save(const struct SymbolTableEl *, FILE *);
+static struct SymbolTableEl *symbolTableEl_load(FILE *, const struct Graph *);
 static void symbolTableEl_free(struct SymbolTableEl *el);
-static char *computeRealWord(const struct Graph *g, const char *word);
+
+/* Node */
 static struct Node *node_new(const struct Graph *, const struct Zone *, const 
-		struct StringArray *sa, int owner);
-#if 0
-static struct Node *node_nextCont(const struct Graph *g, const struct Node 
-		*prev, char cont);
-#endif
+		char *word, int owner);
+static char *node_computeRealWord(const struct Node *);
 static struct Node *node_succCont(const struct Graph *, const struct Node *prev, 
 		char cont);
-static struct Node *node_succUncont(const struct Graph *, const struct Node 
-		*prev, char uncont);
 static void node_addEdgeNoDouble(struct Node *n, enum EdgeType type, struct Node 
-		*succ);
-static void node_removeEdge(struct Node *n, enum EdgeType type, struct Node 
 		*succ);
 static void node_addEdgeStop(struct Node *n, struct Node *succ);
 static void node_addEdgeCont(struct Node *n, struct Node *succ, int);
 static void node_addEdgeUncont(struct Node *n, struct Node *succ, int);
 static void node_addEdgeEmit(struct Node *n, struct Node *succ);
+static void node_addEdgeTime(struct Node *n, struct Node *succ);
+static void node_save(const struct Node *, FILE *);
+static struct List *node_loadAll(FILE *, const struct Graph *g);
 static void node_free(Node *n);
-static const struct State *state_nextCont(const struct State *, char c, const 
-		struct Dbmw *);
-static const struct State *state_nextUncont(const struct State *, char c, const 
-		struct Dbmw *);
-static void state_free(struct State *s);
-static struct StateEdge *stateEdge_new(const struct TimedAutomaton *, const struct 
-		State *, const struct List *guards, const struct List *resets);
-static void stateEdge_free(struct StateEdge *);
+
+/* Edge */
 static struct Edge *edge_new(enum EdgeType type, struct Node *n);
 static void edge_free(struct Edge *e);
+
+/* State */
+static void state_save(const struct State *, FILE *);
+static void state_loadAll(FILE *, struct TimedAutomaton *a);
+static void state_free(struct State *s);
+
+/* StateEdge */
+static struct StateEdge *stateEdge_new(const struct TimedAutomaton *, const 
+		struct State *, const struct List *guards, const struct List *resets);
+static void stateEdge_save(const struct StateEdge *, FILE *);
+static struct StateEdge *stateEdge_load(FILE *, const struct TimedAutomaton *);
+static void stateEdge_free(struct StateEdge *);
+
+/* Zone */
 static struct Zone *zone_new(const struct State *, struct Dbmw *, const struct 
 		ZoneGraph *);
 static struct Zone *zone_newcp(const struct Zone *);
 static int zone_areEqual(const struct Zone *, const struct Zone *);
+static struct Zone *zone_nextCont(const struct Zone *, char);
+static void zone_addEdge(struct Zone *, const struct Zone *, enum EdgeType );
+static void zone_save(const struct Zone *, FILE *);
+static struct List *zone_loadAll(FILE *, const struct ZoneGraph *, const struct 
+		Graph *);
 static void zone_free(struct Zone *);
-static void createChars(const struct List *l, struct List **psymbolTable, char 
-		**pchars, struct SymbolTableEl *[256]);
-static unsigned int contIndex(const struct Graph *g, char c);
-static unsigned int uncontIndex(const struct Graph *g, char u);
-static void node_setWinning(void *dummy, void *pn);
-static void computeStrat(void *dummy, Node *n);
-static void addEdgesToLast(struct Graph *g);
-static void Node_freeWithLinks(struct Graph *g, Node *n);
-static void attr(struct Set *ret, struct Graph *g, int player, const struct Set 
-		*U, struct List *nodes);
-static void computeW0(struct Graph *g, struct Set *ret);
-static void addNodes(struct Graph *g, struct Tree *);
+
+/* ZoneEdge */
+static struct ZoneEdge *zoneEdge_new(enum EdgeType, const struct Zone *);
+static int zoneEdge_cmp(const struct ZoneEdge *, const struct ZoneEdge *);
+static void zoneEdge_free(struct ZoneEdge *);
+
+/* TimedAutomaton */
 static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable, 
 		const struct SymbolTableEl *contsEls[], const struct List *uncontsTable, 
 		const struct SymbolTableEl *uncontsEls[], const struct List *states, 
 		const struct List *clocks, const struct List *edges);
+static void timedAutomaton_save(const struct TimedAutomaton *, FILE *);
+static struct TimedAutomaton *timedAutomaton_load(FILE *, const struct Graph *);
+static void timedAutomaton_free(struct TimedAutomaton *);
+
+/* ArrayTwo */
 static struct ArrayTwo *arraytwo_new(unsigned int size, int defaultVal);
 static struct ArrayTwo *arraytwo_newcp(const struct ArrayTwo *);
 static void arraytwo_cp(struct ArrayTwo *, const struct ArrayTwo *);
 static int arraytwo_cmp(const struct ArrayTwo *, const struct ArrayTwo *);
 static void arraytwo_free(struct ArrayTwo *);
-static void computeTree(struct Tree *, struct Graph *);
 
+/* StringArray */
+static struct StringArray *stringArray_new(const struct Graph *);
+static struct StringArray *stringArray_newcp(const struct StringArray *);
+static struct StringArray *stringArray_newNext(const struct StringArray *prev, 
+		const struct Graph *, char);
+static void stringArray_free(struct StringArray *);
 
-static int cmpSymbolChar(const void *val, const void *pel)
-{
-	const struct SymbolTableEl *el = pel;
-	const char c = *(const char *)val;
-	return (el->c == c);
-}
+/* ZoneGraph */
+static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *);
+static struct List *zoneGraph_splitZones2(const struct Zone *, const struct Zone 
+		*);
+static struct List *zoneGraph_splitZones(const struct Zone *z, const struct List 
+		*rho);
+static struct List *zoneGraph_pre(const struct Zone *z, const struct List *rho);
+static struct List *zoneGraph_post(const struct Zone *z, struct List *rho);
+static void zoneGraph_save(const struct ZoneGraph *, FILE *);
+static struct ZoneGraph *zoneGraph_load(FILE *, const struct Graph *);
+static void zoneGraph_free(struct ZoneGraph *);
 
-static int cmpSymbolLabel(const void *val, const void *pel)
-{
-	const struct SymbolTableEl *el = pel;
-	const char *label = val;
-	return (strcmp(val, el->sym) == 0);
-}
+/* Graph */
+static void graph_createChars(const struct List *l, struct List **psymbolTable, 
+		char **pchars, struct SymbolTableEl *[256]);
+static struct Tree *graph_computeStrings(const struct Graph *);
+static void graph_computeTree(struct Tree *, const struct Graph *);
+static void graph_addNodes(struct Graph *, struct Tree *);
+static void graph_addNodesRec(struct Graph *g, const struct Zone *z, const 
+		struct Tree *stringArrays, struct Node *pred);
+static void addEmitEdges(struct Graph *);
+static void addUncontEdges(struct Graph *);
+static void addTimeEdges(struct Graph *);
+static unsigned int graph_contIndex(const struct Graph *g, char c);
+static void graph_computeW0(struct Graph *g, struct Set *ret);
+static void graph_attr(struct Set *ret, struct Graph *g, int player, const 
+		struct Set *U, struct List *nodes);
 
-static int cmpSymId(const void *val, const void *pel)
-{
-	const struct SymbolTableEl *el = pel;
-	const unsigned int id = *(const unsigned int *)val;
-	return (el->id == id);
-}
+/* Clock save/load */
+static void clock_save(const struct Clock *, FILE *);
+static struct Clock *clock_load(FILE *);
 
-static int cmpStateId(const void *val, const void *pState)
-{
-	const struct State *s = pState;
-	const int id = *(const int *)val;
-	return (s->parserStateId == id);
-}
+/* Enforcer */
+static unsigned int enforcer_computeDelay(const struct Enforcer *);
+static void enforcer_computeStratNode(struct Enforcer *);
 
-static int cmpNode(const void *val, const void *pNode)
-{
-	const struct Node *n = pNode;
-	const struct SearchNode *s = val;
-	return (n->z == s->z && n->owner == s->owner &&
-			strcmp(s->word, n->sa->s) == 0);
-}
+/* -------------------------------------------------------------------------- */
 
-static int cmpEdge(const void *pe1, const void *pe2)
-{
-	const struct Edge *e1 = pe1;
-	const struct Edge *e2 = pe2;
-	return (e1->type == e2->type && e1->succ == e2->succ);
-}
-
-#if 0
-static int cmpLastBufferChar(const void *pNode1, const void *pNode2)
-{
-	const Node *n1 = pNode1, *n2 = pNode2;
-	return (n1->word[strlen(n1->word)-1] == n2->word[strlen(n2->word)-1]);
-}
-#endif 
-
-static int notSetIn(struct Set *s, void *el)
-{
-	return !set_in(s, el);
-}
-
-static int eqPtr(const void *p1, const void *p2)
-{
-	return (p1 == p2);
-}
-
+/* Helper functions for ccontainers */
 static int listIn(struct List *l, void *data)
 {
 	return (list_search(l, data, eqPtr) != NULL);
@@ -344,80 +367,130 @@ static void removeSetFromList(struct List *l, const struct Set *s)
 	set_applyToAll(s, (void (*)(void*, void*))list_remove, l);
 }
 
+
+/* Functions to use with list_search */
+static int cmpSymbolChar(const void *val, const void *pel)
+{
+	const struct SymbolTableEl *el = pel;
+	const char c = *(const char *)val;
+	return (el->c == c);
+}
+
+static int cmpSymbolLabel(const void *val, const void *pel)
+{
+	const struct SymbolTableEl *el = pel;
+	const char *label = val;
+	return (strcmp(label, el->sym) == 0);
+}
+
+static int cmpSymId(const void *val, const void *pel)
+{
+	const struct SymbolTableEl *el = pel;
+	const unsigned int id = *(const unsigned int *)val;
+	return (el->id == id);
+}
+
+static int cmpEdge(const void *pe1, const void *pe2)
+{
+	const struct Edge *e1 = pe1;
+	const struct Edge *e2 = pe2;
+	return (e1->type == e2->type && e1->succ == e2->succ);
+}
+
+static int cmpZoneIndex(const void *val, const void *pz)
+{
+	const struct Zone *z = pz;
+	const unsigned int index = *(const int *)val;
+	return (z->index == index);
+}
+
+static int cmpNodeIndex(const void *val, const void *pn)
+{
+	const struct Node *n = pn;
+	const unsigned int index = *(const int *)val;
+	return (n->index == index);
+}
+
+static int eqPtr(const void *p1, const void *p2)
+{
+	return (p1 == p2);
+}
+
+/* Used with set_applyToAll */
+static void node_setWinning(void *dummy, void *pn)
+{
+	Node *n = pn;
+	(void)dummy;
+	n->isWinning = 1;
+}
+
+static void node_computeStrat(void *dummy, void *pn)
+{
+	struct Node *n = pn;
+	(void)dummy;
+	if (n->owner == 0 && n->p0.succEmit != NULL && n->p0.succEmit->isWinning)
+		n->p0.strat = STRAT_EMIT;
+}
+
+
+/* SymbolTableEl */
+static struct SymbolTableEl *symbolTableEl_new(char c, const char *sym, unsigned 
+		int id)
+{
+	struct SymbolTableEl *el = malloc(sizeof *el);
+
+	if (el == NULL)
+	{
+		perror("malloc el");
+		exit(EXIT_FAILURE);
+	}
+	el->c = c;
+	el->sym = strdup(sym);
+	el->id = id;
+	el->size = strlen(el->sym);
+
+	return el;
+}
+
+static void symbolTableEl_save(const struct SymbolTableEl *el, FILE *f)
+{
+	save_uint64(f, (uint64_t)el->index);
+	save_string(f, el->sym);
+	fprintf(f, "%c", el->c);
+}
+
+static struct SymbolTableEl *symbolTableEl_load(FILE *f, const struct Graph *g)
+{
+	struct SymbolTableEl *el = malloc(sizeof *el);
+
+	if (el == NULL)
+	{
+		perror("malloc symbolTableEl_load:el");
+		exit(EXIT_FAILURE);
+	}
+
+	el->index = (int)load_uint64(f);
+	el->sym = load_string(f);
+	el->c = fgetc(f);
+	el->id = -1;
+	el->size = strlen(el->sym);
+
+	return el;
+}
+
 static void symbolTableEl_free(struct SymbolTableEl *el)
 {
 	free(el->sym);
 	free(el);
 }
 
-static char *computeRealWord(const struct Graph *g, const char *word)
-{
-	char *label;
-	int size = 0, i;
-	struct SymbolTableEl **syms;
-	struct SymbolTableEl starSym, plusSym;
 
-	starSym.sym = "*";
-	starSym.size = 1;
-	starSym.c = '*';
-	starSym.id = -1;
-	plusSym.sym = "+";
-	plusSym.size = 1;
-	plusSym.c = '+';
-	plusSym.id = -1;
-
-	syms = malloc(strlen(word) * sizeof *syms);
-	if (syms == NULL)
-	{
-		perror("malloc syms");
-		exit(EXIT_FAILURE);
-	}
-
-	i = 0;
-	while (word[i] != '\0')
-	{
-		struct SymbolTableEl *s;
-		if (word[i] == '*')
-			s = &starSym;
-		else if (word[i] == '+')
-			s = &plusSym;
-		else
-		{
-			s = list_search(g->contsTable, &(word[i]), cmpSymbolChar);
-			if (s == NULL)
-			{
-				fprintf(stderr, "ERROR: could not find symbol associated to " 
-						"%c\n", word[i]);
-				exit(EXIT_FAILURE);
-			}
-		}
-
-		size += s->size;
-		syms[i++] = s;
-	}
-
-	label = malloc(size + 1);
-	if (label == NULL)
-	{
-		perror("malloc label");
-		exit(EXIT_FAILURE);
-	}
-	label[0] = '\0';
-	i = 0;
-	while (word[i] != '\0')
-	{
-		strcat(label, syms[i]->sym);
-		i++;
-	}
-
-	free(syms);
-
-	return label;
-}
-
+/* Node */
+/* Private interface */
 static struct Node *node_new(const struct Graph *g, const struct Zone *z, const 
-		struct StringArray *sa, int owner)
+		char *word, int owner)
 {
+	static unsigned int nextIndex = 0;
 	int i;
 	struct Node *n = malloc(sizeof *n);
 
@@ -428,15 +501,16 @@ static struct Node *node_new(const struct Graph *g, const struct Zone *z, const
 	}
 
 	n->z = z;
-	n->sa = sa;
+	n->word = strdup(word);
 	n->owner = owner;
 	n->isAccepting = z->s->isAccepting;
-	n->isInitial = (z->s->isInitial && sa->s[0] == '\0' && owner == 0 && 
+	n->isInitial = (z->s->isInitial && word[0] == '\0' && owner == 0 && 
 			dbmw_containsZero(z->dbm));
 	n->isWinning = 0;
 	n->isLeaf = 0;
-	n->realWord = computeRealWord(g, sa->s);
+	n->realWord = node_computeRealWord(n);
 	n->edges = list_new();
+	n->index = nextIndex++;
 	n->userData = NULL;
 	n->g = g;
 	if (n->owner == 0)
@@ -474,32 +548,351 @@ static struct Node *node_new(const struct Graph *g, const struct Zone *z, const
 	return n;
 }
 
-#if 0
-static struct Node *node_nextCont(const struct Graph *g, const struct Node 
-		*prev, char cont)
+static char *node_computeRealWord(const struct Node *n)
 {
-	int wordSize = strlen(prev->sa->s) + 1;
-	char *newWord = malloc(wordSize + 1);
-	struct Node *n;
+	char *label;
+	int size = 0, i;
+	struct SymbolTableEl **syms;
 
-	if (newWord == NULL)
+	syms = malloc(strlen(n->word) * sizeof *syms);
+	if (syms == NULL)
 	{
-		perror("malloc newWord");
+		perror("malloc syms");
 		exit(EXIT_FAILURE);
 	}
 
-	strcpy(newWord, prev->word);
-	newWord[wordSize-1] = cont;
-	newWord[wordSize] = '\0';
+	i = 0;
+	while (n->word[i] != '\0')
+	{
+		struct SymbolTableEl *s;
+		s = n->g->contsEls[(unsigned char)n->word[i]];
+		if (s == NULL)
+		{
+			fprintf(stderr, "ERROR: could not find symbol associated to %c\n", 
+					n->word[i]);
+			exit(EXIT_FAILURE);
+		}
 
-	n = node_new(g, prev->q, newWord, prev->owner);
+		size += s->size;
+		syms[i++] = s;
+	}
 
-	free(newWord);
+	label = malloc(size + 1);
+	if (label == NULL)
+	{
+		perror("malloc label");
+		exit(EXIT_FAILURE);
+	}
+	label[0] = '\0';
+	i = 0;
+	while (n->word[i] != '\0')
+	{
+		strcat(label, syms[i]->sym);
+		i++;
+	}
 
-	return n;
+	free(syms);
+
+	return label;
 }
-#endif
 
+static struct Node *node_succCont(const struct Graph *g, const struct Node 
+		*prev, char cont)
+{
+	if (prev->owner == 0)
+		prev = prev->p0.succStopEmit;
+	return prev->p1.succsCont[graph_contIndex(g, cont)];
+}
+
+static void node_addEdgeNoDouble(struct Node *n, enum EdgeType type, struct Node 
+		*succ)
+{
+	struct Edge searchEdge;
+	searchEdge.type = type;
+	searchEdge.succ = succ;
+	if (list_search(n->edges, &searchEdge, cmpEdge) == NULL)
+		list_add(n->edges, edge_new(type, succ));
+}
+
+static void node_addEdgeStop(struct Node *n, struct Node *succ)
+{
+	n->p0.succStopEmit = succ;
+	succ->p1.predStop = n;
+	node_addEdgeNoDouble(n, STOPEMIT, succ);
+	/* If there is no time successor, add the reverse edge, to represent the end 
+	 * of the execution */
+	if (succ->z->timeSucc == NULL)
+		node_addEdgeNoDouble(succ, UNCONTRCVD, n);
+}
+
+static void node_addEdgeCont(struct Node *n, struct Node *succ, int i)
+{
+	n->p1.succsCont[i] = succ;
+	succ->p0.predContRcvd = n;
+	node_addEdgeNoDouble(n, CONTRCVD, succ);
+}
+
+static void node_addEdgeUncont(struct Node *n, struct Node *succ, int i)
+{
+	n->p1.succsUncont[i] = succ;
+	listAddNoDouble(succ->p0.predsUncont, n);
+	node_addEdgeNoDouble(n, UNCONTRCVD, succ);
+}
+
+static void node_addEdgeEmit(struct Node *n, struct Node *succ)
+{
+	n->p0.succEmit = succ;
+	listAddNoDouble(succ->p0.predsEmit, n);
+	node_addEdgeNoDouble(n, EMIT, succ);
+}
+
+static void node_addEdgeTime(struct Node *n, struct Node *succ)
+{
+	n->p1.succTime = succ;
+	succ->p0.predTime = n;
+	node_addEdgeNoDouble(n, TIMELPSD, succ);
+}
+
+static void node_save(const struct Node *n, FILE *f)
+{
+	save_uint64(f, (uint64_t)n->index);
+	save_uint64(f, (uint64_t)(n->isWinning != 0));
+	save_uint64(f, (uint64_t)(n->isLeaf != 0));
+	save_uint64(f, (uint64_t)n->owner);
+
+	save_string(f, n->word);
+
+	save_uint64(f, (uint64_t)n->z->index);
+	if (n->owner == 0)
+	{
+		save_uint64(f, (uint64_t)n->p0.succStopEmit->index);
+		if (n->p0.succEmit != NULL)
+			save_uint64(f, (uint64_t)n->p0.succEmit->index);
+		else
+			save_uint64(f, (uint64_t)-1);
+		save_uint64(f, (uint64_t)n->p0.strat);
+	}
+	else
+	{
+		int i;
+
+		for (i = 0 ; i < n->g->nbConts ; i++)
+		{
+			if (n->p1.succsCont[i] != NULL)
+				save_uint64(f, (uint64_t)n->p1.succsCont[i]->index);
+			else
+				save_uint64(f, (uint64_t)-1);
+		}
+		for (i = 0 ; i < n->g->nbUnconts ; i++)
+		{
+			save_uint64(f, (uint64_t)n->p1.succsUncont[i]->index);
+		}
+		if (n->p1.succTime != NULL)
+			save_uint64(f, (uint64_t)n->p1.succTime->index);
+		else
+			save_uint64(f, (uint64_t)-1);
+	}
+}
+
+static struct List *node_loadAll(FILE *f, const struct Graph *g)
+{
+	struct List *nodes = list_new();
+	int i, j;
+	struct ListIterator *it;
+	union Succs
+	{
+		struct
+		{
+			unsigned int succStop;
+			unsigned int succEmit;
+			enum Strat strat;
+		}p0;
+		struct
+		{
+			unsigned int *succsCont;
+			unsigned int *succsUncont;
+			unsigned int succTime;
+		}p1;
+	};
+	union Succs *succs = malloc(g->nbNodes * sizeof *succs);
+
+	if (succs == NULL)
+	{
+		perror("malloc node_loadAll:succs");
+		exit(EXIT_FAILURE);
+	}
+
+	for (i = 0 ; i < g->nbNodes ; i++)
+	{
+		struct Node *n;
+		unsigned int index, zoneIndex;
+		int owner, isWinning, isLeaf;
+		struct Zone *z;
+		char *word;
+
+		index = (unsigned int)load_uint64(f);
+		isWinning = (int)load_uint64(f);
+		isLeaf = (int)load_uint64(f);
+		owner = (int)load_uint64(f);
+		word = load_string(f);
+		zoneIndex = (unsigned int)load_uint64(f);
+		if (owner == 0)
+		{
+			succs[index].p0.succStop = (unsigned int)load_uint64(f);
+			succs[index].p0.succEmit = (unsigned int)load_uint64(f);
+			succs[index].p0.strat = (enum Strat)load_uint64(f);
+		}
+		else
+		{
+			succs[index].p1.succsCont = malloc(g->nbConts * sizeof 
+					succs->p1.succsCont);
+			if (succs[index].p1.succsCont == NULL)
+			{
+				perror("malloc succs[index].p1.succsCont");
+				exit(EXIT_FAILURE);
+			}
+			succs[index].p1.succsUncont = malloc(g->nbUnconts * sizeof 
+					succs->p1.succsUncont);
+			if (succs[index].p1.succsUncont == NULL)
+			{
+				perror("malloc succs[index].p1.succsUncont");
+				exit(EXIT_FAILURE);
+			}
+			for (j = 0 ; j < g->nbConts ; j++)
+			{
+				succs[index].p1.succsCont[j] = (unsigned int)load_uint64(f);
+			}
+			for (j = 0 ; j < g->nbUnconts ; j++)
+			{
+				succs[index].p1.succsUncont[j] = (unsigned int)load_uint64(f);
+			}
+			succs[index].p1.succTime = (unsigned int)load_uint64(f);
+		}
+		z = list_search(g->zoneGraph->zones, &zoneIndex, cmpZoneIndex);
+		if (z == NULL)
+		{
+			fprintf(stderr, "ERROR: node_loadAll: no zone of index %u found\n", 
+					zoneIndex);
+			exit(EXIT_FAILURE);
+		}
+		n = node_new(g, z, word, owner);
+		n->index = index;
+		n->isWinning = isWinning;
+		n->isLeaf = isLeaf;
+		list_add(nodes, n);
+		free(word);
+	}
+
+	for (it = listIterator_first(nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		if (n->owner == 0)
+		{
+			struct Node *succ = list_search(nodes, 
+					&(succs[n->index].p0.succStop), cmpNodeIndex);
+			if (succ == NULL)
+			{
+				fprintf(stderr, "ERROR: node_loadAll: No node with index %u for"
+						" succStop of %u found\n", succs[n->index].p0.succStop, 
+						n->index);
+				exit(EXIT_FAILURE);
+			}
+			node_addEdgeStop(n, succ);
+			if (succs[n->index].p0.succEmit != -1)
+			{
+				succ = list_search(nodes, &(succs[n->index].p0.succEmit), 
+						cmpNodeIndex);
+				if (succ == NULL)
+				{
+					fprintf(stderr, "ERROR: node_loadAll: No node with index %u" 
+							" for succEmit of %u found\n", 
+							succs[n->index].p0.succEmit, n->index);
+					exit(EXIT_FAILURE);
+				}
+				node_addEdgeEmit(n, succ);
+				n->p0.strat = succs[n->index].p0.strat;
+			}
+		}
+		else
+		{
+			struct Node *succ;
+			for (i = 0 ; i < g->nbConts ; i++)
+			{
+				if (succs[n->index].p1.succsCont[i] == -1)
+					continue;
+				succ = list_search(nodes, &(succs[n->index].p1.succsCont[i]), 
+						cmpNodeIndex);
+				if (succ == NULL)
+				{
+					fprintf(stderr, "ERROR: node_loadAll: No node with index %u"
+							" for succsCont[%d] of %u found.\n", 
+							succs[n->index].p1.succsUncont[i], i, n->index);
+					exit(EXIT_FAILURE);
+				}
+				node_addEdgeCont(n, succ, i);
+			}
+			for (i = 0 ; i < g->nbUnconts ; i++)
+			{
+				succ = list_search(nodes, &(succs[n->index].p1.succsUncont[i]), 
+						cmpNodeIndex);
+				if (succ == NULL)
+				{
+					fprintf(stderr, "ERROR: node_loadAll: No node with index %u"
+							" for succsUncont[%d] of %u found.\n", 
+							succs[n->index].p1.succsUncont[i], i, n->index);
+					exit(EXIT_FAILURE);
+				}
+				node_addEdgeUncont(n, succ, i);
+			}
+			if (succs[n->index].p1.succTime == -1)
+				n->p1.succTime = NULL;
+			else
+			{
+				succ = list_search(nodes, &(succs[n->index].p1.succTime), 
+						cmpNodeIndex);
+				if (succ == NULL)
+				{
+					fprintf(stderr, "ERROR: node_loadAll: No node with index %u"
+							" for succTime of %u found.\n", 
+							succs[n->index].p1.succTime, n->index);
+					exit(EXIT_FAILURE);
+				}
+				node_addEdgeTime(n, succ);
+			}
+
+			free(succs[n->index].p1.succsCont);
+			free(succs[n->index].p1.succsUncont);
+		}
+	}
+	listIterator_release(it);
+
+	free(succs);
+
+	return nodes;
+}
+
+static void node_free(Node *n)
+{
+	if (n->owner == 0)
+	{
+		list_free(n->p0.predsEmit, NULL);
+		list_free(n->p0.predsUncont, NULL);
+	}
+	else
+	{
+		free(n->p1.succsCont);
+		free(n->p1.succsUncont);
+	}
+
+	list_free(n->edges, (void (*)(void *))edge_free);
+
+	free(n->word);
+	free(n->realWord);
+	free(n);
+}
+
+/* Node public interface */
 const char *node_stateLabel(const struct Node *n)
 {
 	return n->z->s->name;
@@ -560,143 +953,140 @@ const struct List *node_edges(const struct Node *n)
 	return n->edges;
 }
 
-static struct Node *node_succCont(const struct Graph *g, const struct Node *prev, 
-		char cont)
-{
-	if (prev->owner == 0)
-		prev = prev->p0.succStopEmit;
-	return prev->p1.succsCont[contIndex(g, cont)];
-}
 
-static struct Node *node_succUncont(const struct Graph *g, const struct Node 
-		*prev, char uncont)
+/* Edge */
+static struct Edge *edge_new(enum EdgeType type, struct Node *n)
 {
-	if (prev->owner == 0)
-		prev = prev->p0.succStopEmit;
-	return prev->p1.succsUncont[uncontIndex(g, uncont)];
-}
+	struct Edge *e = malloc(sizeof *e);
 
-static void node_addEdgeNoDouble(struct Node *n, enum EdgeType type, struct Node 
-		*succ)
-{
-	struct Edge searchEdge;
-	searchEdge.type = type;
-	searchEdge.succ = succ;
-	if (list_search(n->edges, &searchEdge, cmpEdge) == NULL)
-		list_add(n->edges, edge_new(type, succ));
-}
-
-static void node_addEdgeStop(struct Node *n, struct Node *succ)
-{
-	n->p0.succStopEmit = succ;
-	succ->p1.predStop = n;
-	node_addEdgeNoDouble(n, STOPEMIT, succ);
-	/* If there is no time successor, add the reverse edge, to represent the end 
-	 * of the execution */
-	if (succ->z->timeSucc == NULL)
-		node_addEdgeNoDouble(succ, UNCONTRCVD, n);
-}
-
-static void node_addEdgeCont(struct Node *n, struct Node *succ, int i)
-{
-	n->p1.succsCont[i] = succ;
-	succ->p0.predContRcvd = n;
-	node_addEdgeNoDouble(n, CONTRCVD, succ);
-}
-
-static void node_addEdgeUncont(struct Node *n, struct Node *succ, int i)
-{
-	n->p1.succsUncont[i] = succ;
-	listAddNoDouble(succ->p0.predsUncont, n);
-	node_addEdgeNoDouble(n, UNCONTRCVD, succ);
-}
-
-static void node_addEdgeEmit(struct Node *n, struct Node *succ)
-{
-	n->p0.succEmit = succ;
-	listAddNoDouble(succ->p0.predsEmit, n);
-	node_addEdgeNoDouble(n, EMIT, succ);
-}
-
-static void node_addEdgeTime(struct Node *n, struct Node *succ)
-{
-	n->p1.succTime = succ;
-	succ->p0.predTime = n;
-	node_addEdgeNoDouble(n, TIMELPSD, succ);
-}
-
-static void node_removeEdge(struct Node *n, enum EdgeType type, struct Node 
-		*succ)
-{
-	struct Edge *e, searchEdge;
-	searchEdge.type = type;
-	searchEdge.succ = succ;
-	e = list_search(n->edges, &searchEdge, cmpEdge);
-	if (e != NULL)
+	if (e == NULL)
 	{
-		list_remove(n->edges, e);
-		edge_free(e);
+		perror("malloc e");
+		exit(EXIT_FAILURE);
 	}
+	e->type = type;
+	e->succ = n;
+
+	return e;
 }
 
-static void node_free(Node *n)
+static void edge_free(struct Edge *e)
 {
-	if (n->owner == 0)
-	{
-		list_free(n->p0.predsEmit, NULL);
-		list_free(n->p0.predsUncont, NULL);
-	}
-	else
-	{
-		free(n->p1.succsCont);
-		free(n->p1.succsUncont);
-	}
-
-	list_free(n->edges, (void (*)(void *))edge_free);
-
-	free(n->realWord);
-	free(n);
+	free(e);
 }
 
-static const struct State *state_nextCont(const struct State *s, char c, const struct 
-		Dbmw *guards)
+
+/* State */
+static void state_save(const struct State *s, FILE *f)
 {
 	struct ListIterator *it;
-	struct List *edges = s->contSuccs[(unsigned char)c];
+	unsigned int c;
+	
+	save_uint64(f, (uint64_t)s->index);
+	save_uint64(f, (uint64_t)(s->isInitial != 0));
+	save_uint64(f, (uint64_t)(s->isAccepting != 0));
+	save_string(f, s->name);
 
-	for (it = listIterator_first(edges) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
+	for (c = 0 ;  c < NBSUCCS ; c++)
 	{
-		struct StateEdge *e = listIterator_val(it);
-		if (dbmw_intersects(e->dbm, guards))
-			return e->to;
+		if (s->contSuccs[c] == NULL)
+			continue;
+		fprintf(f, "%c", c);
+		save_uint64(f, (uint64_t)list_size(s->contSuccs[c]));
+		for (it = listIterator_first(s->contSuccs[c]) ; listIterator_hasNext(it) 
+				; it = listIterator_next(it))
+		{
+			struct StateEdge *e = listIterator_val(it);
+			stateEdge_save(e, f);
+		}
+		listIterator_release(it);
 	}
-	listIterator_release(it);
+
+	for (c = 0 ; c < NBSUCCS ; c++)
+	{
+		if (s->uncontSuccs[c] == NULL)
+			continue;
+		fprintf(f, "%c", c);
+		save_uint64(f, (uint64_t)list_size(s->uncontSuccs[c]));
+		for (it = listIterator_first(s->uncontSuccs[c]) ; 
+				listIterator_hasNext(it) ; it = listIterator_next(it))
+		{
+			struct StateEdge *e = listIterator_val(it);
+			stateEdge_save(e, f);
+		}
+		listIterator_release(it);
+	}
 }
 
-static const struct State *state_nextUncont(const struct State *s, char c, const 
-		struct Dbmw *guards)
+static void state_loadAll(FILE *f, struct TimedAutomaton *a)
 {
-	struct ListIterator *it;
-	struct List *edges = s->uncontSuccs[(unsigned char)c];
+	int i, j, k;
+	uint64_t nbSuccs;
+	unsigned int n;
 
-	for (it = listIterator_first(edges) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
+	/* a->nbStates + 1 because there is the sink state */
+	for (i = 0 ; i < a->nbStates + 1 ; i++)
 	{
-		struct StateEdge *e = listIterator_val(it);
-		if (dbmw_intersects(e->dbm, guards))
-			return e->to;
+		a->states[i].index = (unsigned int)load_uint64(f);
+		a->states[i].isInitial = load_uint64(f) != 0;
+		a->states[i].isAccepting = load_uint64(f) != 0;
+		a->states[i].name = load_string(f);
+
+		for (j = 0 ; j < NBSUCCS ; j++)
+		{
+			a->states[i].contSuccs[j] = NULL;
+			a->states[i].uncontSuccs[j] = NULL;
+		}
+
+		n = list_size(a->contsTable);
+		for (j = 0 ; j < n ; j++)
+		{
+			char c = fgetc(f);
+			a->states[i].contSuccs[(unsigned char)c] = list_new();
+			nbSuccs = load_uint64(f);
+			for (k = 0 ; k < nbSuccs ; k++)
+			{
+				list_add(a->states[i].contSuccs[(unsigned char)c], 
+						stateEdge_load(f, a));
+			}
+		}
+
+		n = list_size(a->uncontsTable);
+		for (j = 0 ; j < n ; j++)
+		{
+			char c = fgetc(f);
+			a->states[i].uncontSuccs[(unsigned char)c] = list_new();
+			nbSuccs = load_uint64(f);
+			for (k = 0 ; k < nbSuccs ; k++)
+			{
+				list_add(a->states[i].uncontSuccs[(unsigned char)c], 
+						stateEdge_load(f, a));
+			}
+		}
 	}
-	listIterator_release(it);
+	a->sinkBadState = &(a->states[a->nbStates]);
 }
 
 static void state_free(struct State *s)
 {
+	int i;
+
+	for (i = 0 ; i < NBSUCCS ; i++)
+	{
+		if (s->contSuccs[i] != NULL)
+			list_free(s->contSuccs[i], NULL);
+		if (s->uncontSuccs[i] != NULL)
+			list_free(s->uncontSuccs[i], NULL);
+	}
+
 	free(s->name);
 }
 
-static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const struct 
-		State *s, const struct List *constraints, const struct List *resets)
+
+/* StateEdge */
+static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const 
+		struct State *s, const struct List *constraints, const struct List 
+		*resets)
 {
 	struct ListIterator *it;
 	struct StateEdge *ret;
@@ -718,7 +1108,8 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 			listIterator_next(it))
 	{
 		const struct ParserClockConstraint *pconstraint = listIterator_val(it);
-		const struct ParserClock *pclock = parserClockConstraint_getClock(pconstraint);
+		const struct ParserClock *pclock = 
+			parserClockConstraint_getClock(pconstraint);
 		int pclockId = parserClock_getId(pclock);
 		enum ParserRelation rel = parserClockConstraint_getRel(pconstraint);
 		int bound = parserClockConstraint_getBound(pconstraint);
@@ -754,6 +1145,9 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 			case GEQ:
 				dbmw_constrain(ret->dbm, NULL, clock, -bound, rel == GT);
 			break;
+
+			default:
+			break;
 		}
 	}
 	listIterator_release(it);
@@ -785,6 +1179,51 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 	return ret;
 }
 
+static void stateEdge_save(const struct StateEdge *e, FILE *f)
+{
+	struct ListIterator *it;
+	dbmw_save(e->dbm, f);
+	save_uint64(f, (uint64_t)list_size(e->resets));
+
+	for (it = listIterator_first(e->resets) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Clock *c = listIterator_val(it);
+		save_uint64(f, (uint64_t)clock_getIndex(c));
+	}
+	listIterator_release(it);
+
+	save_uint64(f, (uint64_t)e->to->index);
+}
+
+static struct StateEdge *stateEdge_load(FILE *f, const struct TimedAutomaton *a)
+{
+	struct StateEdge *e = malloc(sizeof *e);
+	uint64_t n;
+	int i;
+
+	if (e == NULL)
+	{
+		perror("malloc stateEdge_load:e");
+		exit(EXIT_FAILURE);
+	}
+	
+	e->dbm = dbmw_load(f);
+	e->resets = list_new();
+	n = load_uint64(f);
+
+	for (i = 0 ; i < n ; i++)
+	{
+		uint64_t clockIndex = load_uint64(f);
+		list_add(e->resets, a->clocks[clockIndex]);
+	}
+
+	n = load_uint64(f);
+	e->to = &(a->states[n]);
+
+	return e;
+}
+
 static void stateEdge_free(struct StateEdge *e)
 {
 	dbmw_free(e->dbm);
@@ -792,52 +1231,9 @@ static void stateEdge_free(struct StateEdge *e)
 	free(e);
 }
 
-static struct Edge *edge_new(enum EdgeType type, struct Node *n)
-{
-	struct Edge *e = malloc(sizeof *e);
 
-	if (e == NULL)
-	{
-		perror("malloc e");
-		exit(EXIT_FAILURE);
-	}
-	e->type = type;
-	e->succ = n;
-
-	return e;
-}
-
-static void edge_free(struct Edge *e)
-{
-	free(e);
-}
-
-static struct ZoneEdge *zoneEdge_new(enum EdgeType type, const struct Zone *z)
-{
-	struct ZoneEdge *e = malloc(sizeof *e);
-
-	if (e == NULL)
-	{
-		perror("malloc zoneEdge_new:e");
-		exit(EXIT_FAILURE);
-	}
-
-	e->type = type;
-	e->succ = z;
-
-	return e;
-}
-
-static int zoneEdge_cmp(const struct ZoneEdge *e1, const struct ZoneEdge *e2)
-{
-	return (e1->type == e2->type && e1->succ == e2->succ);
-}
-
-static void zoneEdge_free(struct ZoneEdge *e)
-{
-	free(e);
-}
-
+/* Zone */
+/* Zone private interface */
 static struct Zone *zone_new(const struct State *s, struct Dbmw *dbm, const
 		struct ZoneGraph *zg)
 {
@@ -904,15 +1300,6 @@ static struct Zone *zone_newcp(const struct Zone *z)
 	return zone_new(z->s, dbmw_newcp(z->dbm), z->zg);
 }
 
-static void zone_addEdge(struct Zone *z, const struct Zone *succ, enum EdgeType 
-		type)
-{
-	struct ZoneEdge *edge = zoneEdge_new(type, succ);
-	if (list_search(z->edges, edge, (int (*)(const void *, const void 
-						*))zoneEdge_cmp) == NULL)
-		list_add(z->edges, edge);
-}
-
 static int zone_areEqual(const struct Zone *z1, const struct Zone *z2)
 {
 	return (z1->s == z2->s && dbmw_areEqual(z1->dbm, z2->dbm));
@@ -921,22 +1308,258 @@ static int zone_areEqual(const struct Zone *z1, const struct Zone *z2)
 static struct Zone *zone_nextCont(const struct Zone *z, char c)
 {
 	struct Zone *ret = z->contSuccs[z->a->contsEls[(unsigned char)c]->index];
-	const struct SymbolTableEl *el = z->a->contsEls[(unsigned char)c];
 	if (ret == NULL)
 		ret = z->zg->sinkZone;
 
 	return ret;
 }
 
+static void zone_addEdge(struct Zone *z, const struct Zone *succ, enum EdgeType 
+		type)
+{
+	struct ZoneEdge *edge = zoneEdge_new(type, succ);
+	if (list_search(z->edges, edge, (int (*)(const void *, const void 
+						*))zoneEdge_cmp) == NULL)
+		list_add(z->edges, edge);
+	else
+		zoneEdge_free(edge);
+}
+
+static void zone_save(const struct Zone *z, FILE *f)
+{
+	unsigned int i;
+	unsigned int nbConts = list_size(z->a->contsTable);
+	unsigned int nbUnconts = list_size(z->a->uncontsTable);
+
+	save_uint64(f, (uint64_t)z->index);
+	save_uint64(f, (uint64_t)z->s->index);
+	save_uint64(f, (uint64_t)CANARY);
+	dbmw_save(z->dbm, f);
+	for (i = 0 ; i < nbConts ; i++)
+	{
+		save_uint64(f, (uint64_t)z->contSuccs[i]->index);
+	}
+	for (i = 0 ; i < nbConts ; i++)
+	{
+		struct ListIterator *it;
+
+		save_uint64(f, (uint64_t)list_size(z->resetsConts[i]));
+		for (it = listIterator_first(z->resetsConts[i]) ; 
+				listIterator_hasNext(it) ; it = listIterator_next(it))
+		{
+			struct Clock *c = listIterator_val(it);
+			save_uint64(f, (uint64_t)clock_getIndex(c));
+		}
+	}
+
+	for (i = 0 ; i < nbUnconts ; i++)
+	{
+		save_uint64(f, (uint64_t)z->uncontSuccs[i]->index);
+	}
+	for (i = 0 ; i < nbUnconts ; i++)
+	{
+		struct ListIterator *it;
+
+		save_uint64(f, (uint64_t)list_size(z->resetsUnconts[i]));
+		for (it = listIterator_first(z->resetsUnconts[i]) ; 
+				listIterator_hasNext(it) ; it = listIterator_next(it))
+		{
+			struct Clock *c = listIterator_val(it);
+			save_uint64(f, (uint64_t)clock_getIndex(c));
+		}
+	}
+	if (z->timeSucc != NULL)
+		save_uint64(f, (uint64_t)z->timeSucc->index);
+	else
+		save_uint64(f, (uint64_t)-1);
+}
+
+static struct List *zone_loadAll(FILE *f, const struct ZoneGraph *zg, const 
+		struct Graph *g)
+{
+	int i, j, k;
+	struct ListIterator *it;
+	struct List *zones = list_new();
+	unsigned int *contsSuccsIndexes, *uncontsSuccsIndexes, *timeSuccsIndexes;
+	unsigned int nbConts = list_size(zg->a->contsTable);
+	unsigned int nbUnconts = list_size(zg->a->uncontsTable);
+
+	contsSuccsIndexes = malloc(zg->nbZones * nbConts * sizeof 
+			*contsSuccsIndexes);
+	if (contsSuccsIndexes == NULL)
+	{
+		perror("malloc zone_loadAll:contsSuccsIndexes");
+		exit(EXIT_FAILURE);
+	}
+
+	uncontsSuccsIndexes = malloc(zg->nbZones * nbUnconts * sizeof 
+			*uncontsSuccsIndexes);
+	if (uncontsSuccsIndexes == NULL)
+	{
+		perror("malloc zone_loadAll:uncontsSuccsIndexes");
+		exit(EXIT_FAILURE);
+	}
+
+	timeSuccsIndexes = malloc(zg->nbZones * sizeof *timeSuccsIndexes);
+	if (timeSuccsIndexes == NULL)
+	{
+		perror("malloc zone_loadAll:timeSuccsIndexes");
+		exit(EXIT_FAILURE);
+	}
+
+	for (i = 0 ; i < zg->nbZones ; i++)
+	{
+		struct Zone *z;
+		struct State *s;
+		struct Dbmw *dbm;
+		unsigned int index, stateIndex, nbResets;
+		char *printedZone;
+		uint64_t n;
+
+		index = (unsigned int)load_uint64(f);
+		stateIndex = (unsigned int)load_uint64(f);
+		s = &(zg->a->states[stateIndex]);
+		if ((n = load_uint64(f)) != CANARY)
+		{
+			fprintf(stderr, "ERROR: Canary %lx expected, %lx instead\n", CANARY, 
+					n);
+			exit(EXIT_FAILURE);
+		}
+		dbm = dbmw_load(f);
+		z = zone_new(s, dbm, zg);
+		z->index = index;
+		for (j = 0 ; j < nbConts ; j++)
+		{
+			contsSuccsIndexes[index * nbConts + j] = (unsigned 
+					int)load_uint64(f);
+		}
+		// TODO Boucle 0 --> nbConts
+		for (j = 0 ; j < nbConts ; j++)
+		{
+			nbResets = (unsigned int)load_uint64(f);
+			for (k = 0 ; k < nbResets ; k++)
+			{
+				unsigned int clockIndex = (unsigned int)load_uint64(f);
+				list_add(z->resetsConts[j], zg->a->clocks[clockIndex]);
+			}
+		}
+		for (j = 0 ; j < nbUnconts ; j++)
+		{
+			uncontsSuccsIndexes[index * nbUnconts + j] = (unsigned 
+					int)load_uint64(f);
+		}
+		for (j = 0 ; j < nbUnconts ; j++)
+		{
+			nbResets = (unsigned int)load_uint64(f);
+			for (k = 0 ; k < nbResets ; k++)
+			{
+				unsigned int clockIndex = (unsigned int)load_uint64(f);
+				list_add(z->resetsUnconts[j], zg->a->clocks[clockIndex]);
+			}
+		}
+		timeSuccsIndexes[i] = (unsigned int)load_uint64(f);
+
+		printedZone = dbmw_sprint(z->dbm, g->a->clocks);
+		/* malloc for "s->name, zone" */
+		z->name = malloc(strlen(z->s->name) + strlen(printedZone) + 3);
+		if (z->name == NULL)
+		{
+			perror("malloc zoneGraph_loadAll:z->name");
+			exit(EXIT_FAILURE);
+		}
+		sprintf(z->name, "%s, %s", z->s->name, printedZone);
+		free(printedZone);
+
+		list_add(zones, z);
+	}
+
+	for (it = listIterator_first(zones) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Zone *z = listIterator_val(it);
+		for (j = 0 ; j < nbConts ; j++)
+		{
+			z->contSuccs[j] = list_search(zones, &(contsSuccsIndexes[z->index * 
+						nbConts + j]), cmpZoneIndex);
+			if (z->contSuccs[j] == NULL)
+			{
+				fprintf(stderr, "ERROR: No zone of index %u for contsSuccs[%u]"
+						" of zone of index %u found\n", 
+						contsSuccsIndexes[z->index 
+						* nbConts + j], j, z->index);
+				exit(EXIT_FAILURE);
+			}
+			zone_addEdge(z, z->contSuccs[j], CONTRCVD);
+		}
+		
+		for (j = 0 ; j < nbUnconts ; j++)
+		{
+			z->uncontSuccs[j] = list_search(zones, 
+					&(uncontsSuccsIndexes[z->index * nbUnconts + j]), 
+					cmpZoneIndex);
+			if (z->uncontSuccs[j] == NULL)
+			{
+				fprintf(stderr, "ERROR: No zone of index %u for"
+						" uncontsSuccs[%u] of zone of index %u found\n", 
+						uncontsSuccsIndexes[z->index 
+						* nbUnconts + j], j, z->index);
+				exit(EXIT_FAILURE);
+			}
+			zone_addEdge(z, z->uncontSuccs[j], UNCONTRCVD);
+		}
+		
+		if (timeSuccsIndexes[z->index] == -1)
+			z->timeSucc = NULL;
+		else
+		{
+			z->timeSucc = list_search(zones, &(timeSuccsIndexes[z->index]), 
+					cmpZoneIndex);
+			if (z->timeSucc == NULL)
+			{
+				fprintf(stderr, "ERROR: No timeSucc found for zone of index"
+						" %u\n", z->index);
+				exit(EXIT_FAILURE);
+			}
+			zone_addEdge(z, z->timeSucc, TIMELPSD);
+		}
+	}
+	listIterator_release(it);
+
+	free(contsSuccsIndexes);
+	free(uncontsSuccsIndexes);
+	free(timeSuccsIndexes);
+
+	return zones;
+}
+
 static void zone_free(struct Zone *z)
 {
+	int i, n;
+
+	free(z->name);
 	dbmw_free(z->dbm);
+
 	free(z->contSuccs);
+	n = list_size(z->a->contsTable);
+	for (i = 0 ; i < n ; i++)
+	{
+		list_free(z->resetsConts[i], NULL);
+	}
+	free(z->resetsConts);
 	free(z->uncontSuccs);
-	list_free(z->edges, NULL);
+	n = list_size(z->a->uncontsTable);
+	for (i = 0 ; i < n ; i++)
+	{
+		list_free(z->resetsUnconts[i], NULL);
+	}
+	free(z->resetsUnconts);
+
+	list_free(z->edges, (void (*)(void *))zoneEdge_free);
+
 	free(z);
 }
 
+/* Zone public interface */
 const struct List *zone_getEdges(const struct Zone *z)
 {
 	return z->edges;
@@ -972,567 +1595,36 @@ void *zone_getData(const struct Zone *z)
 	return z->userData;
 }
 	
-static void createChars(const struct List *l, struct List **psymbolTable, char 
-		**pchars, struct SymbolTableEl *elTable[256])
+
+/* ZoneEdge */
+static struct ZoneEdge *zoneEdge_new(enum EdgeType type, const struct Zone *z)
 {
-	int size = list_size(l);
-	int i;
-	struct ListIterator *it;
-	char *chars;
-	struct List *symbolTable;
-	const char *symLabels = 
-		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+	struct ZoneEdge *e = malloc(sizeof *e);
 
-	*psymbolTable = list_new();
-	symbolTable = *psymbolTable;
-
-
-	if (size > 52)
+	if (e == NULL)
 	{
-		fprintf(stderr, "Too many events (max. 52).\n");
+		perror("malloc zoneEdge_new:e");
 		exit(EXIT_FAILURE);
 	}
 
-	*pchars = malloc(size + 1);
-	chars = *pchars;
-	if (chars == NULL)
-	{
-		perror("malloc chars");
-		exit(EXIT_FAILURE);
-	}
-	strncpy(chars, symLabels, size);
-	chars[size] = '\0';
+	e->type = type;
+	e->succ = z;
 
-	for (it = listIterator_first(l), i = 0 ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it), i++)
-	{
-		struct ParserSymbol *s = listIterator_val(it);
-		struct SymbolTableEl *el = malloc(sizeof *el);
-
-		if (el == NULL)
-		{
-			perror("malloc el");
-			exit(EXIT_FAILURE);
-		}
-		el->c = chars[i];
-		el->sym = strdup(parserSymbol_getLabel(s));
-		el->id = parserSymbol_getId(s);
-		el->size = strlen(el->sym);
-		el->index = i;
-		list_add(symbolTable, el);
-		elTable[(unsigned char)el->c] = el;
-	}
-	listIterator_release(it);
+	return e;
 }
 
-static inline unsigned int contIndex(const struct Graph *g, char c)
+static int zoneEdge_cmp(const struct ZoneEdge *e1, const struct ZoneEdge *e2)
 {
-	return g->contsEls[(unsigned char)c]->index;
+	return (e1->type == e2->type && e1->succ == e2->succ);
 }
 
-static inline unsigned int uncontIndex(const struct Graph *g, char u)
+static void zoneEdge_free(struct ZoneEdge *e)
 {
-	return g->uncontsEls[(unsigned char)u]->index;
+	free(e);
 }
 
-static void node_setWinning(void *dummy, void *pn)
-{
-	Node *n = pn;
-	(void)dummy;
-	n->isWinning = 1;
-}
 
-static void computeStrat(void *dummy, Node *n)
-{
-	if (n->owner == 0 && n->p0.succEmit != NULL && n->p0.succEmit->isWinning)
-		n->p0.strat = STRAT_EMIT;
-}
-
-#if 0
-static void addEdgesToLast(struct Graph *g)
-{
-	struct ListIterator *it;
-	struct SearchNode sn;
-	struct Node *dest;
-	struct Edge *e;
-	int i;
-
-	/* Add internal edges (i.e. edges between two nodes in lastCreated) */
-	for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
-			= listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-		if (n->owner == 0)
-		{
-			/* (q, w, 0) --> (q, w, 1) */
-			sn.q = n->q;
-			sn.word = n->word;
-			sn.owner = 1;
-			dest = list_search(g->lastCreated, &sn, cmpNode);
-			if (dest == NULL)
-			{
-				fprintf(stderr, "ERROR: cannot find node (%s, %s, 1) in "
-						"lastCreated.\n", n->q->name, n->word);
-				exit(EXIT_FAILURE);
-			}
-			n->p0.succStopEmit = dest;
-			dest->p1.predStop = n;
-			list_add(n->edges, edge_new(STOPEMIT, dest));
-
-			if (n->word[0] != '\0')
-			{
-				char c;
-
-				/* (q, c . w, 0) --> (q after c, w, 0) */
-				sn.q = n->q->contSuccs[(unsigned char)n->word[0]];
-				sn.word = n->word + 1; /* Remove first event */
-				sn.owner = 0;
-				dest = list_search(g->nodes, &sn, cmpNode);
-				if (dest == NULL)
-				{
-					fprintf(stderr, "ERROR: cannot find node (%s, %s, 0) in "
-							"nodes.\n", n->q->name, n->word + 1);
-					exit(EXIT_FAILURE);
-				}
-				n->p0.succEmit = dest;
-				list_add(dest->p0.predsEmit, n);
-				list_add(n->edges, edge_new(EMIT, dest));
-
-				/* (q, w.c, 0) <-- (q, w, 1) */
-				sn.q = n->q;
-				sn.word = n->word;
-				c = n->word[strlen(n->word) - 1];
-				n->word[strlen(n->word) - 1] = '\0';
-				sn.owner = 1;
-				dest = list_search(g->nodes, &sn, cmpNode);
-				if (dest == NULL)
-				{
-					fprintf(stderr, "ERROR: cannot find node (%s, %s, 1) in "
-							"nodes.\n", sn.q->name, n->word);
-					exit(EXIT_FAILURE);
-				}
-				n->word[strlen(n->word)] = c;
-				/* !! dest --> n !! */
-				dest->p1.succsCont[contIndex(g, c)] = n;
-				n->p0.predContRcvd = dest;
-				list_add(dest->edges, edge_new(CONTRCVD, n));
-			}
-		}
-		else
-		{
-			int size = strlen(g->uncontsChars);
-			char c;
-			/* (q, w, 1) --> (q after u, w, 0) */
-			for (i = 0 ; i < size ; i++)
-			{
-				sn.q = n->q->uncontsSuccs[(unsigned char)g->uncontsChars[i]];
-				sn.word = n->word;
-				sn.owner = 0;
-				dest = list_search(g->lastCreated, &sn, cmpNode);
-				if (dest == NULL)
-				{
-					fprintf(stderr, "ERROR: cannot find node (%s, %s, 1) in "
-							"lastCreated.\n", n->q->name, n->word);
-					exit(EXIT_FAILURE);
-				}
-				list_add(n->p1.succsUncont, dest);
-				list_add(dest->p0.predsUncont, n);
-				list_add(n->edges, edge_new(UNCONTRCVD, dest));
-			}
-		}
-	}
-
-	listIterator_release(it);
-}
-#endif
-
-static void Node_freeWithLinks(struct Graph *g, Node *n)
-{
-	node_free(n);
-	list_remove(g->nodes, n);
-}
-
-static void attr(struct Set *ret, struct Graph *g, int player, const struct Set 
-		*U, struct List *nodes)
-{
-	int stable = 0;
-	struct ListIterator *it, *it2;
-	int i;
-
-	set_reset(ret);
-	set_copy(ret, U, NULL);
-
-	while (!stable)
-	{
-		stable = 1;
-
-		for (it = listIterator_first(nodes) ; listIterator_hasNext(it) ; it = 
-				listIterator_next(it))
-		{
-			struct Node *n = listIterator_val(it);
-			if (set_in(ret, n))
-				continue;
-			if (n->owner == player)
-			{
-				for (it2 = listIterator_first(n->edges) ; 
-						listIterator_hasNext(it2) ; it2 = 
-						listIterator_next(it2))
-				{
-					struct Edge *e = listIterator_val(it2);
-					if (listIn(nodes, e->succ) && set_in(ret, e->succ))
-					{
-						stable = 0;
-						set_add(ret, n);
-						break;
-					}
-				}
-				listIterator_release(it2);
-				/*
-				if (n->owner == 0)
-				{
-					if ((listIn(nodes, n->p0.succEmit) && set_in(ret, 
-									n->p0.succEmit))
-						|| (listIn(nodes, n->p0.succStopEmit) && set_in(ret, 
-								n->p0.succStopEmit)))
-					{
-						stable = 0;
-						set_add(ret, n);
-					}
-				}
-				else
-				{
-					struct ListIterator *it2;
-
-					for (i = 0 ; i < g->nbConts ; i++)
-					{
-						Node *succ = n->p1.succsCont[i];
-						if (succ != NULL && listIn(nodes, succ) && set_in(ret, 
-									succ))
-						{
-							stable = 0;
-							set_add(ret, n);
-							break;
-						}
-					}
-
-					if (stable)
-					{
-						for (it2 = listIterator_first(n->p1.succsUncont) ; 
-								listIterator_hasNext(it2) ; it2 = 
-								listIterator_next(it2))
-						{
-							Node *succ = listIterator_val(it2);
-							if (listIn(nodes, succ) && set_in(ret, succ))
-							{
-								stable = 0;
-								set_add(ret, n);
-								break;
-							}
-						}
-						listIterator_release(it2);
-					}
-				}
-				*/
-			}
-			/* n->owner != player */
-			else
-			{
-				int ok = 1;
-
-				for (it2 = listIterator_first(n->edges) ; 
-						listIterator_hasNext(it2) ; it2 = 
-						listIterator_next(it2))
-				{
-					struct Edge *e = listIterator_val(it2);
-					if (listIn(nodes, e->succ) && !set_in(ret, e->succ))
-						ok = 0;
-				}
-				listIterator_release(it2);
-				/*
-				if (n->owner == 0)
-				{
-					if ((n->word[0] == '\0' ||
-							(listIn(nodes, n->p0.succEmit) && 
-								set_in(ret, n->p0.succEmit))) 
-						&& 
-						listIn(nodes, n->p0.succStopEmit) &&
-							set_in(ret, n->p0.succStopEmit))
-					{
-						stable = 0;
-						set_add(ret, n);
-					}
-				}
-				else
-				{
-					int ok = 1;
-
-					for (i = 0 ; i < g->nbConts ; i++)
-					{
-						Node *succ = n->p1.succsCont[i];
-						if (succ != NULL && listIn(nodes, succ) && !set_in(ret, 
-									succ))
-						{
-							ok = 0;
-							break;
-						}
-					}
-					if (ok)
-					{
-						for (it2 = listIterator_first(n->p1.succsUncont) ; 
-								listIterator_hasNext(it2) ; it2 = 
-								listIterator_next(it2))
-						{
-							Node *succ = listIterator_val(it2);
-							if (succ != NULL && listIn(nodes, succ) && 
-									!set_in(ret, succ))
-							{
-								ok = 0;
-								break;
-							}
-						}
-						listIterator_release(it2);
-					}
-				}
-			*/
-				if (ok)
-				{
-					stable = 0;
-					set_add(ret, n);
-				}
-			}
-		}
-		listIterator_release(it);
-	}
-}
-
-static void computeW0(struct Graph *g, struct Set *ret)
-{
-	struct List *S = list_new();
-	struct ListIterator *it;
-	struct Set *B = set_empty(NULL);
-	struct Set *R = set_empty(NULL);
-	struct Set *Tr = set_empty(NULL);
-	struct Set *W = set_empty(NULL);
-	struct Set *Sset = set_empty(NULL);
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-		list_add(S, n);
-		set_add(Sset, n);
-		if (n->isAccepting)
-			set_add(B, n);
-	}
-	listIterator_release(it);
-	set_reset(ret);
-
-	do
-	{
-		attr(R, g, 0, B, S);
-
-		/* Tr = S \ B */
-		set_reset(Tr);
-		for (it = listIterator_first(S) ; listIterator_hasNext(it) ; it = 
-				listIterator_next(it))
-		{
-			set_add(Tr, listIterator_val(it));
-		}
-		listIterator_release(it);
-		set_remove(Tr, (int (*)(const void *, const void *))set_in, R);
-
-		attr(W, g, 1, Tr, S);
-		removeSetFromList(S, W);
-
-		set_remove(B, (int (*)(const void *, const void *))set_in, W);
-		set_applyToAll(W, (void (*)(void *, void *))set_add, ret);
-	} while (!set_isEmpty(W));
-
-	/* ret = S \ ret */
-	set_copy(W, ret, NULL);
-	set_copy(ret, Sset, NULL);
-	set_remove(ret, (int (*)(const void *, const void *))set_in, W);
-
-	list_free(S, NULL);
-	set_free(B);
-	set_free(R);
-	set_free(Tr);
-	set_free(W);
-	set_free(Sset);
-}
-
-static void addNodesRec(struct Graph *g, const struct Zone *z, struct Tree 
-		*stringArrays, struct Node *pred)
-{
-	struct StringArray *sa;
-	struct Node *n[2];
-	int i, nbSons;
-
-	sa = tree_getData(stringArrays);
-	for (i = 0 ; i < 2 ; i++)
-	{
-		n[i] = node_new(g, z, sa, i);
-		list_add(g->nodes, n[i]);
-		list_add(g->nodesP[i], n[i]);
-	}
-
-	node_addEdgeStop(n[0], n[1]);
-	if (pred != NULL)
-		node_addEdgeCont(pred, n[0], contIndex(g, sa->s[strlen(sa->s) - 1]));
-	else
-		g->baseNodes[z->index] = n[0];
-	nbSons = tree_getNbSons(stringArrays);
-	if (nbSons == 0)
-	{
-		n[0]->isLeaf = 1;
-		n[1]->isLeaf = 1;
-	}
-	for (i = 0 ; i < nbSons ; i++)
-	{
-		addNodesRec(g, z, tree_getSon(stringArrays, i), n[1]);
-	}
-}
-
-static void addNodes(struct Graph *g, struct Tree *stringArrays)
-{
-	struct ListIterator *it;
-
-	for (it = listIterator_first(g->zoneGraph->zones) ; listIterator_hasNext(it) 
-			; it = listIterator_next(it))
-	{
-		struct Zone *z = listIterator_val(it);
-		addNodesRec(g, z, stringArrays, NULL);
-	}
-	listIterator_release(it);
-
-	g->nbNodes = list_size(g->nodes);
-}
-
-static void addEmitEdges(struct Graph *g)
-{
-	struct ListIterator *it;
-	char *remain;
-	struct Node *next;
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-
-		if (n->owner == 1)
-			continue;
-
-		/* it is impossible to emit something from a node that has nothing to be 
-		 * emitted */
-		if (n->sa->s[0] == '\0')
-			continue;
-
-		next = g->baseNodes[n->z->contSuccs[g->contsEls[(unsigned 
-				char)(n->sa->s[0])]->index]->index];
-		remain = n->sa->s + 1;
-
-		while (*remain != '\0')
-		{
-			next = node_succCont(g, next, *remain);
-			remain++;
-		}
-
-		node_addEdgeEmit(n, next);
-	}
-	listIterator_release(it);
-}
-
-static void addUncontEdges(struct Graph *g)
-{
-	struct ListIterator *it;
-	char *remain;
-	struct Node *next;
-	int i;
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-
-		if (n->owner == 0)
-			continue;
-
-		for (i = 0 ;  i < g->nbUnconts ; i++)
-		{
-			next = g->baseNodes[n->z->uncontSuccs[i]->index];
-
-			/* Do not loop */
-			if (next == n)
-				continue;
-
-			remain = n->sa->s;
-
-			while (*remain != '\0')
-			{
-				next = node_succCont(g, next, *remain);
-				remain++;
-			}
-
-			node_addEdgeUncont(n, next, i);
-		}
-	}
-	listIterator_release(it);
-}
-
-static void addTimeEdges(struct Graph *g)
-{
-	struct ListIterator *it;
-	char *remain;
-	struct Node *next;
-	int i;
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-
-		if (n->owner == 0 || n->z->timeSucc == NULL)
-			continue;
-
-		next = g->baseNodes[n->z->timeSucc->index];
-
-		/* Do not loop */
-		if (next == n)
-			continue;
-
-		remain = n->sa->s;
-
-		while (*remain != '\0')
-		{
-			next = node_succCont(g, next, *remain);
-			remain++;
-		}
-
-		node_addEdgeTime(n, next);
-	}
-	listIterator_release(it);
-}
-
-static void addEmitAllEdges(struct Graph *g)
-{
-	struct ListIterator *it;
-
-	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct Node *n = listIterator_val(it);
-		if (n->owner == 0 && n->isLeaf)
-		{
-			n->p0.succEmitAll = n;
-			while (n->p0.succEmitAll->p0.succEmit != NULL)
-			{
-				n->p0.succEmitAll = n->p0.succEmitAll->p0.succEmit;
-			}
-		}
-	}
-	listIterator_release(it);
-}
-
+/* TimedAutomaton */
 static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable, 
 		const struct SymbolTableEl *contsEls[], const struct List *uncontsTable, 
 		const struct SymbolTableEl *uncontsEls[], const struct List *states, 
@@ -1619,8 +1711,8 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 	}
 	listIterator_release(it);
 
-	for (it = listIterator_first(a->uncontsTable) ; listIterator_hasNext(it) ; it 
-			= listIterator_next(it))
+	for (it = listIterator_first(a->uncontsTable) ; listIterator_hasNext(it) ; 
+			it = listIterator_next(it))
 	{
 		struct SymbolTableEl *el = listIterator_val(it);
 		for (i = 0 ; i < a->nbStates + 1 ; i++)
@@ -1704,12 +1796,73 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 	return a;
 }
 
-void timedAutomaton_free(struct TimedAutomaton *a)
+static void timedAutomaton_save(const struct TimedAutomaton *a, FILE *f)
+{
+	int i;
+
+	save_uint64(f, (uint64_t)a->nbClocks);
+	for (i = 0 ; i < a->nbClocks ; i++)
+	{
+		clock_save(a->clocks[i], f);
+	}
+
+	save_uint64(f, (uint64_t)a->nbStates);
+	/* Add 1 for the sink state */
+	for (i = 0 ; i < a->nbStates + 1 ; i++)
+	{
+		state_save(&(a->states[i]), f);
+	}
+}
+
+static struct TimedAutomaton *timedAutomaton_load(FILE *f, const struct Graph 
+		*g)
+{
+	struct TimedAutomaton *a;
+	int i;
+
+	a = malloc(sizeof *a);
+	if (a == NULL)
+	{
+		perror("malloc timedAutomaton_load:a");
+		exit(EXIT_FAILURE);
+	}
+
+	a->contsTable = g->contsTable;
+	a->contsEls = (const struct SymbolTableEl **)g->contsEls;
+	a->uncontsTable = g->uncontsTable;
+	a->uncontsEls = (const struct SymbolTableEl **)g->uncontsEls;
+
+	a->nbClocks = (unsigned int)load_uint64(f);
+	a->clocks = malloc(a->nbClocks * sizeof *(a->clocks));
+	if (a->clocks == NULL)
+	{
+		perror("malloc timedAutomaton_load:a->clocks");
+		exit(EXIT_FAILURE);
+	}
+	for (i = 0 ; i < a->nbClocks ; i++)
+	{
+		struct Clock *c = clock_load(f);
+		a->clocks[i] = c;
+	}
+
+	a->nbStates = (unsigned int)load_uint64(f);
+	a->states = malloc((a->nbStates + 1) * sizeof *(a->states));
+	if (a->states == NULL)
+	{
+		perror("malloc timedAutomaton_load:a->states");
+		exit(EXIT_FAILURE);
+	}
+	state_loadAll(f, a);
+
+	return a;
+}
+
+static void timedAutomaton_free(struct TimedAutomaton *a)
 {
 	int i, j;
-	for (i = 0 ; i < a->nbStates ; i++)
+	for (i = 0 ; i < a->nbStates + 1 ; i++)
 	{
-		for (j = 0 ; j < 256 ; j++)
+		for (j = 0 ; j < NBSUCCS ; j++)
 		{
 			struct ListIterator *it;
 			if (a->states[i].contSuccs[j] != NULL)
@@ -1735,13 +1888,18 @@ void timedAutomaton_free(struct TimedAutomaton *a)
 		}
 		state_free(&(a->states[i]));
 	}
-	for (i = 1 ; i < a->nbClocks ; i++)
+	free(a->states);
+
+	for (i = 0 ; i < a->nbClocks ; i++)
 	{
 		clock_free(a->clocks[i]);
 	}
+	free(a->clocks);
+
 	free(a);
 }
 
+/* ArrayTwo */
 static struct ArrayTwo *arraytwo_new(unsigned int size, int defaultVal)
 {
 	int i, j;
@@ -1854,6 +2012,10 @@ static void arraytwo_free(struct ArrayTwo *a)
 	free(a);
 }
 
+/** Do not call the stringArray_ functions when the graph has been loaded and 
+ * not computed, the only information that is stored is the buffer (sa->s), the 
+ * other fields are only necessary to compute the graph. In this case, only call 
+ * stringArray_load */
 static struct StringArray *stringArray_new(const struct Graph *g)
 {
 	int i;
@@ -1920,7 +2082,7 @@ static struct StringArray *stringArray_newcp(const struct StringArray *sa)
 }
 
 static struct StringArray *stringArray_newNext(const struct StringArray *prev, 
-		struct Graph *g, char c)
+		const struct Graph *g, char c)
 {
 	int i;
 	struct StringArray *ret = stringArray_newcp(prev);
@@ -1952,22 +2114,6 @@ static struct StringArray *stringArray_newNext(const struct StringArray *prev,
 	return ret;
 }
 
-static void stringArray_print(const struct StringArray *sa)
-{
-	int i, j;
-
-	printf("%s\n", (sa->s[0] == '\0') ? "-" : sa->s);
-	
-	for (i = 0 ; i < sa->array->size ; i++)
-	{
-		for (j = 0 ; j < sa->array->size ; j++)
-		{
-			printf("%d ", sa->array->tab[i][j]);
-		}
-		printf("\n");
-	}
-}
-
 static void stringArray_free(struct StringArray *sa)
 {
 	free(sa->s);
@@ -1975,73 +2121,332 @@ static void stringArray_free(struct StringArray *sa)
 	free(sa);
 }
 
-static void printTree(struct Tree *t)
+
+/* ZoneGraph */
+/* ZoneGraph private interface */
+static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 {
-	struct StringArray *sa;
-	struct Fifo *fifo = fifo_empty();
-	int level = 0;
-	int i;
-
-	fifo_enqueue(fifo, t);
-
-	while (!fifo_isEmpty(fifo))
-	{
-		t = fifo_dequeue(fifo);
-		sa = tree_getData(t);
-
-		if (strlen(sa->s) != level)
-		{
-			printf("\n\n");
-			level++;
-		}
-
-		stringArray_print(sa);
-
-		for (i = 0 ; i < tree_getNbSons(t) ; i++)
-		{
-			fifo_enqueue(fifo, tree_getSon(t, i));
-		}
-	}
-
-	fifo_free(fifo);
-}
-
-static struct Tree *computeStrings(struct Graph *g)
-{
-	struct Tree *t;
-	int i, j;
-	struct StringArray *root = stringArray_new(g);
-
-	t = tree_new(root);
-	computeTree(t, g);
-
-	//printTree(t);
-	
-	return t;
-}
-
-static void computeTree(struct Tree *t, struct Graph *g)
-{
+	struct List *rho = list_new();
+	struct List *alpha = list_new();
+	struct List *sigma = list_new();
+	struct List *alpha1;
 	struct ListIterator *it;
-	struct StringArray *sap = tree_getData(t), *sa;
-	struct Tree *son;
-	int i, j;
+	struct Zone *X, *z;
+	int i;
+	struct ZoneGraph *zg;
+	int sinkZoneReached;
 
-	for (i = 0 ; i < g->nbConts ; i++)
+	zg = malloc(sizeof *zg);
+	if (zg == NULL)
 	{
-		sa = stringArray_newNext(sap, g, g->contsChars[i]);
-
-		son = tree_new(sa);
-		tree_addSon(t, son);
-		if (!arraytwo_cmp(sa->array, sap->array))
-			computeTree(son, g);
+		perror("malloc zoneGraph_new:zg");
+		exit(EXIT_FAILURE);
 	}
+	zg->a = a;
+	zg->zones = list_new();
+	zg->zonesS = malloc((a->nbStates + 1) * sizeof *(zg->zonesS));
+	if (zg->zonesS == NULL)
+	{
+		perror("malloc zoneGraph_new:zg->zones");
+		exit(EXIT_FAILURE);
+	}
+	for (i = 0 ; i < a->nbStates ; i++)
+	{
+		zg->zonesS[i] = list_new();
+	}
+	zg->z0 = NULL;
+	zg->sinkZone = zone_new(a->sinkBadState, dbmw_new(a->nbClocks), zg);
+
+	for (i = 0 ; i < a->nbStates ; i++)
+	{
+		z = zone_new(&(a->states[i]), dbmw_new(a->nbClocks), zg);
+		list_add(rho, z);
+		if (a->states[i].isInitial)
+		{
+			struct Zone *z2 = zone_newcp(z);
+			list_add(alpha, z2);
+			X = z2;
+		}
+	}
+
+	while (X != NULL)
+	{
+		alpha1 = zoneGraph_splitZones(X, rho);
+
+		if (list_size(alpha1) == 1)
+		{
+			struct List *posts;
+
+			if (list_search(sigma, X, (int (*)(const void *, const void 
+								*))zone_areEqual) == NULL)
+				list_add(sigma, zone_newcp(X));
+
+
+			posts = zoneGraph_post(X, rho);
+
+			for (it = listIterator_first(posts) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				if (list_search(alpha, z, (int (*)(const void *, const void 
+									*))zone_areEqual) == NULL)
+					list_add(alpha, z);
+			}
+			listIterator_release(it);
+
+			list_free(posts, NULL);
+
+			list_free(alpha1, (void (*)(void *))zone_free);
+		}
+		else
+		{
+			struct List *pres;
+
+			list_remove(alpha, X);
+
+			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				struct Zone *Y = listIterator_val(it);
+				if (Y->s->isInitial && dbmw_containsZero(Y->dbm) &&
+						list_search(alpha, Y, (int (*)(const void *, const void 
+									*))zone_areEqual) == NULL)
+				{
+					list_add(alpha, zone_newcp(Y));
+				}
+			}
+			listIterator_release(it);
+
+			pres = zoneGraph_pre(X, rho);
+			for (it = listIterator_first(pres) ; listIterator_hasNext(it) ; it = 
+					listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				struct Zone *z1 = list_search(sigma, z, (int (*)(const void *, 
+								const void *))zone_areEqual);
+				if (z1 != NULL)
+				{
+					list_remove(sigma, z1);
+					zone_free(z1);
+				}
+			}
+			listIterator_release(it);
+			list_free(pres, (void (*)(void *))zone_free);
+
+			z = list_search(rho, X, (int (*)(const void *, const void 
+							*))zone_areEqual);
+			if (z != NULL)
+				list_remove(rho, z);
+			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				if (list_search(rho, z, (int (*)(const void *, const void 
+									*))zone_areEqual) == NULL)
+					list_add(rho, zone_newcp(z));
+			}
+			listIterator_release(it);
+			
+			list_free(alpha1, (void (*)(void *))zone_free);
+		}
+
+		X = NULL;
+		for (it = listIterator_first(alpha) ; listIterator_hasNext(it) ; it = 
+				listIterator_next(it))
+		{
+			z = listIterator_val(it);
+			if (list_search(sigma, z,
+				(int (*)(const void *, const void *))zone_areEqual) ==
+					NULL)
+			{
+				X = z;
+				break;
+			}
+		}
+		listIterator_release(it);
+	}
+
+	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		z = listIterator_val(it);
+		list_add(zg->zones, z);
+		list_add(zg->zonesS[z->s->index], z);
+	}
+	listIterator_release(it);
+
+	list_add(zg->zones, zg->sinkZone);
+	zg->zonesS[a->sinkBadState->index] = list_new();
+	list_add(zg->zonesS[a->sinkBadState->index], zg->sinkZone);
+
+	sinkZoneReached = 0;
+
+	for (it = listIterator_first(zg->zones), i = 0 ; listIterator_hasNext(it) ; 
+			it = listIterator_next(it), i++)
+	{
+		struct ListIterator *it2;
+		char *printedZone;
+
+		z = listIterator_val(it);
+		z->index = i;
+
+		printedZone = dbmw_sprint(z->dbm, a->clocks);
+		/* malloc for "s->name, zone" */
+		z->name = malloc(strlen(z->s->name) + strlen(printedZone) + 3);
+		if (z->name == NULL)
+		{
+			perror("malloc zoneGraph_new:z->name");
+			exit(EXIT_FAILURE);
+		}
+		sprintf(z->name, "%s, %s", z->s->name, printedZone);
+		free(printedZone);
+
+		if (z->s->isInitial && dbmw_containsZero(z->dbm))
+			zg->z0 = z;
+
+		for (it2 = listIterator_first(zg->zonesS[z->s->index]) ; 
+				listIterator_hasNext(it2) ; it2 = listIterator_next(it2))
+		{
+			struct Dbmw *ztmp;
+			struct Zone *z2 = listIterator_val(it2);
+			if (z2 == z)
+				continue;
+			ztmp = dbmw_upTo(z->dbm, z2->dbm);
+			if (ztmp != NULL)
+			{
+				z->timeSucc = z2;
+				zone_addEdge(z, z2, TIMELPSD);
+				dbmw_free(ztmp);
+			}
+		}
+		listIterator_release(it2);
+
+		for (it2 = listIterator_first(a->contsTable) ; listIterator_hasNext(it2) 
+				; it2 = listIterator_next(it2))
+		{
+			struct SymbolTableEl *el = listIterator_val(it2);
+			struct ListIterator *it3;
+			int found = 0;
+
+			for (it3 = listIterator_first(z->s->contSuccs[(unsigned char)el->c]) 
+					; listIterator_hasNext(it3) ; it3 = listIterator_next(it3))
+			{
+				struct StateEdge *se = listIterator_val(it3);
+				struct Dbmw *dbmtmp = dbmw_newcp(z->dbm);
+				if (dbmw_intersection(dbmtmp, se->dbm))
+				{
+					struct ListIterator *it4;
+					for (it4 = listIterator_first(se->resets) ; 
+							listIterator_hasNext(it4) ; it4 = 
+							listIterator_next(it4))
+					{
+						struct Clock *c = listIterator_val(it4);
+						dbmw_reset(dbmtmp, c);
+					}
+					listIterator_release(it4);
+
+					for (it4 = listIterator_first(zg->zonesS[se->to->index]) ; 
+							listIterator_hasNext(it4) ; it4 = 
+							listIterator_next(it4))
+					{
+						struct Zone *z2 = listIterator_val(it4);
+						if (dbmw_intersects(dbmtmp, z2->dbm))
+						{
+							z->contSuccs[el->index] = z2;
+							list_addList(z->resetsConts[el->index], se->resets, 
+									NULL);
+							zone_addEdge(z, z2, CONTRCVD);
+							found = 1;
+							break;
+						}
+					}
+					listIterator_release(it4);
+				}
+				dbmw_free(dbmtmp);
+			}
+			listIterator_release(it3);
+
+			if (!found)
+			{
+				z->contSuccs[el->index] = zg->sinkZone;
+				zone_addEdge(z, zg->sinkZone, CONTRCVD);
+				sinkZoneReached = 1;
+			}
+		}
+		listIterator_release(it2);
+
+		for (it2 = listIterator_first(a->uncontsTable) ; 
+				listIterator_hasNext(it2) ; it2 = listIterator_next(it2))
+		{
+			struct SymbolTableEl *el = listIterator_val(it2);
+			struct ListIterator *it3;
+			int found = 0;
+
+			for (it3 = listIterator_first(z->s->uncontSuccs[(unsigned 
+							char)el->c]) ; listIterator_hasNext(it3) ; it3 = 
+					listIterator_next(it3))
+			{
+				struct StateEdge *se = listIterator_val(it3);
+				struct Dbmw *dbmtmp = dbmw_newcp(z->dbm);
+				if (dbmw_intersection(dbmtmp, se->dbm))
+				{
+					struct ListIterator *it4;
+					for (it4 = listIterator_first(se->resets) ; 
+							listIterator_hasNext(it4) ; it4 = 
+							listIterator_next(it4))
+					{
+						struct Clock *c = listIterator_val(it4);
+						dbmw_reset(dbmtmp, c);
+					}
+					listIterator_release(it4);
+
+					for (it4 = listIterator_first(zg->zonesS[se->to->index]) ; 
+							listIterator_hasNext(it4) ; it4 = 
+							listIterator_next(it4))
+					{
+						struct Zone *z2 = listIterator_val(it4);
+						if (dbmw_intersects(dbmtmp, z2->dbm))
+						{
+							z->uncontSuccs[el->index] = z2;
+							list_addList(z->resetsUnconts[el->index], 
+									se->resets, NULL);
+							zone_addEdge(z, z2, UNCONTRCVD);
+							found = 1;
+							break;
+						}
+					}
+					listIterator_release(it4);
+				}
+				dbmw_free(dbmtmp);
+			}
+			listIterator_release(it3);
+
+			if (!found)
+			{
+				z->uncontSuccs[el->index] = zg->sinkZone;
+				zone_addEdge(z, zg->sinkZone, UNCONTRCVD);
+				sinkZoneReached = 1;
+			}
+		}
+		listIterator_release(it2);
+	}
+	listIterator_release(it);
+
+	if (!sinkZoneReached)
+		list_remove(zg->zones, zg->sinkZone);
+
+	zg->nbZones = list_size(zg->zones);
+
+	list_free(rho, NULL);
+
+	return zg;
 }
 
 /*
  * returns a list of DBMs, not of zones
  */
-struct List *splitZones2(const struct Zone *z0, const struct Zone *z1)
+static struct List *zoneGraph_splitZones2(const struct Zone *z0, const struct 
+		Zone *z1)
 {
 	struct List *ret;
 	struct List *dbms = list_new();
@@ -2132,7 +2537,8 @@ struct List *splitZones2(const struct Zone *z0, const struct Zone *z1)
 	return ret;
 }
 
-struct List *splitZones(const struct Zone *z, const struct List *rho)
+static struct List *zoneGraph_splitZones(const struct Zone *z, const struct List 
+		*rho)
 {
 	struct ListIterator *it;
 	struct List *splits = list_new();
@@ -2144,7 +2550,7 @@ struct List *splitZones(const struct Zone *z, const struct List *rho)
 	{
 		struct Zone *z1 = listIterator_val(it);
 		struct ListIterator *it2;
-		struct List *part = splitZones2(z, z1);
+		struct List *part = zoneGraph_splitZones2(z, z1);
 
 		for (it2 = listIterator_first(part) ; listIterator_hasNext(it2) ; it2 = 
 				listIterator_next(it2))
@@ -2173,7 +2579,7 @@ struct List *splitZones(const struct Zone *z, const struct List *rho)
 	return ret;
 }
 
-struct List *pre(const struct Zone *z, const struct List *rho)
+static struct List *zoneGraph_pre(const struct Zone *z, const struct List *rho)
 {
 	int i;
 	struct ListIterator *it;
@@ -2263,7 +2669,7 @@ struct List *pre(const struct Zone *z, const struct List *rho)
 	return ret;
 }
 
-struct List *post(const struct Zone *z, struct List *rho)
+static struct List *zoneGraph_post(const struct Zone *z, struct List *rho)
 {
 	int i;
 	struct ListIterator *it;
@@ -2354,333 +2760,71 @@ struct List *post(const struct Zone *z, struct List *rho)
 	return ret;
 }
 
-struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
+static void zoneGraph_save(const struct ZoneGraph *zg, FILE *f)
 {
-	struct List *rho = list_new();
-	struct List *alpha = list_new();
-	struct List *sigma = list_new();
-	struct List *alpha1;
 	struct ListIterator *it;
-	struct Zone *X, *z;
-	int i, ok;
-	struct ZoneGraph *zg;
-	int sinkZoneReached;
+	save_uint64(f, (uint64_t)zg->nbZones);
 
-	zg = malloc(sizeof *zg);
-	if (zg == NULL)
-	{
-		perror("malloc zoneGraph_new:zg");
-		exit(EXIT_FAILURE);
-	}
-	zg->a = a;
-	zg->zones = list_new();
-	zg->zonesS = malloc((a->nbStates + 1) * sizeof *(zg->zonesS));
-	if (zg->zonesS == NULL)
-	{
-		perror("malloc zoneGraph_new:zg->zones");
-		exit(EXIT_FAILURE);
-	}
-	for (i = 0 ; i < a->nbStates ; i++)
-	{
-		zg->zonesS[i] = list_new();
-	}
-	zg->z0 = NULL;
-	zg->sinkZone = zone_new(a->sinkBadState, dbmw_new(a->nbClocks), zg);
+	save_uint64(f, (uint64_t)zg->z0->index);
+	save_uint64(f, (uint64_t)zg->sinkZone->index);
 
-	for (i = 0 ; i < a->nbStates ; i++)
-	{
-		z = zone_new(&(a->states[i]), dbmw_new(a->nbClocks), zg);
-		list_add(rho, z);
-		if (a->states[i].isInitial)
-		{
-			struct Zone *z2 = zone_newcp(z);
-			list_add(alpha, z2);
-			X = z2;
-		}
-	}
-
-	while (X != NULL)
-	{
-		alpha1 = splitZones(X, rho);
-
-		if (list_size(alpha1) == 1)
-		{
-			struct List *posts;
-
-			if (list_search(sigma, X, (int (*)(const void *, const void 
-								*))zone_areEqual) == NULL)
-				list_add(sigma, zone_newcp(X));
-
-
-			posts = post(X, rho);
-
-			for (it = listIterator_first(posts) ; listIterator_hasNext(it) ; it 
-					= listIterator_next(it))
-			{
-				z = listIterator_val(it);
-				if (list_search(alpha, z, (int (*)(const void *, const void 
-									*))zone_areEqual) == NULL)
-					list_add(alpha, z);
-			}
-			listIterator_release(it);
-
-			list_free(posts, NULL);
-
-			list_free(alpha1, (void (*)(void *))zone_free);
-		}
-		else
-		{
-			struct List *pres;
-
-			list_remove(alpha, X);
-
-			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
-					= listIterator_next(it))
-			{
-				struct Zone *Y = listIterator_val(it);
-				if (Y->s->isInitial && dbmw_containsZero(Y->dbm) &&
-						list_search(alpha, Y, (int (*)(const void *, const void 
-									*))zone_areEqual) == NULL)
-				{
-					list_add(alpha, zone_newcp(Y));
-				}
-			}
-			listIterator_release(it);
-
-			pres = pre(X, rho);
-			for (it = listIterator_first(pres) ; listIterator_hasNext(it) ; it 
-					= listIterator_next(it))
-			{
-				z = listIterator_val(it);
-				struct Zone *z1 = list_search(sigma, z, (int (*)(const void *, 
-								const void *))zone_areEqual);
-				if (z1 != NULL)
-				{
-					list_remove(sigma, z1);
-					zone_free(z1);
-				}
-			}
-			listIterator_release(it);
-			list_free(pres, (void (*)(void *))zone_free);
-
-			z = list_search(rho, X, (int (*)(const void *, const void *))zone_areEqual);
-			if (z != NULL)
-				list_remove(rho, z);
-			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
-					= listIterator_next(it))
-			{
-				z = listIterator_val(it);
-				if (list_search(rho, z, (int (*)(const void *, const void 
-									*))zone_areEqual) == NULL)
-					list_add(rho, zone_newcp(z));
-			}
-			listIterator_release(it);
-			
-			list_free(alpha1, (void (*)(void *))zone_free);
-		}
-
-		X = NULL;
-		for (it = listIterator_first(alpha) ; listIterator_hasNext(it) ; it = 
-				listIterator_next(it))
-		{
-			z = listIterator_val(it);
-			if (list_search(sigma, z,
-				(int (*)(const void *, const void *))zone_areEqual) ==
-					NULL)
-			{
-				X = z;
-				break;
-			}
-		}
-		listIterator_release(it);
-	}
-
-	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
+	for (it = listIterator_first(zg->zones) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
 	{
-		z = listIterator_val(it);
-		list_add(zg->zones, z);
-		list_add(zg->zonesS[z->s->index], z);
+		struct Zone *z = listIterator_val(it);
+		zone_save(z, f);
 	}
 	listIterator_release(it);
+}
 
-	list_add(zg->zones, zg->sinkZone);
-	zg->zonesS[a->sinkBadState->index] = list_new();
-	list_add(zg->zonesS[a->sinkBadState->index], zg->sinkZone);
+static struct ZoneGraph *zoneGraph_load(FILE *f, const struct Graph *g)
+{
+	struct ZoneGraph *zg = malloc(sizeof *zg);
+	unsigned int z0Index, sinkZoneIndex;
 
-	sinkZoneReached = 0;
-
-	for (it = listIterator_first(zg->zones), i = 0 ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it), i++)
+	if (zg == NULL)
 	{
-		struct ListIterator *it2;
-		char *printedZone;
-
-		z = listIterator_val(it);
-		z->index = i;
-
-		printedZone = dbmw_sprint(z->dbm, a->clocks);
-		/* malloc for "s->name, zone" */
-		z->name = malloc(strlen(z->s->name) + strlen(printedZone) + 3);
-		if (z->name == NULL)
-		{
-			perror("malloc zoneGraph_new:z->name");
-			exit(EXIT_FAILURE);
-		}
-		sprintf(z->name, "%s, %s", z->s->name, printedZone);
-		free(printedZone);
-
-		for (it2 = listIterator_first(zg->zonesS[z->s->index]) ; 
-				listIterator_hasNext(it2) ; it2 = listIterator_next(it2))
-		{
-			struct Dbmw *ztmp;
-			struct Zone *z2 = listIterator_val(it2);
-			if (z2 == z)
-				continue;
-			ztmp = dbmw_upTo(z->dbm, z2->dbm);
-			if (ztmp != NULL)
-			{
-				z->timeSucc = z2;
-				zone_addEdge(z, z2, TIMELPSD);
-				dbmw_free(ztmp);
-			}
-		}
-		listIterator_release(it2);
-
-		for (it2 = listIterator_first(a->contsTable) ; listIterator_hasNext(it2) 
-				; it2 = listIterator_next(it2))
-		{
-			struct SymbolTableEl *el = listIterator_val(it2);
-			struct ListIterator *it3;
-			int found = 0;
-
-			for (it3 = listIterator_first(z->s->contSuccs[(unsigned char)el->c]) 
-					; listIterator_hasNext(it3) ; it3 = listIterator_next(it3))
-			{
-				struct StateEdge *se = listIterator_val(it3);
-				struct Dbmw *dbmtmp = dbmw_newcp(z->dbm);
-				if (dbmw_intersection(dbmtmp, se->dbm))
-				{
-					struct ListIterator *it4;
-					for (it4 = listIterator_first(se->resets) ; 
-							listIterator_hasNext(it4) ; it4 = 
-							listIterator_next(it4))
-					{
-						struct Clock *c = listIterator_val(it4);
-						dbmw_reset(dbmtmp, c);
-					}
-					listIterator_release(it4);
-
-					for (it4 = listIterator_first(zg->zonesS[se->to->index]) ; 
-							listIterator_hasNext(it4) ; it4 = 
-							listIterator_next(it4))
-					{
-						struct Zone *z2 = listIterator_val(it4);
-						if (dbmw_intersects(dbmtmp, z2->dbm))
-						{
-							z->contSuccs[el->index] = z2;
-							list_addList(z->resetsConts[el->index], se->resets, 
-									NULL);
-							zone_addEdge(z, z2, CONTRCVD);
-							found = 1;
-							break;
-						}
-					}
-					listIterator_release(it4);
-				}
-				dbmw_free(dbmtmp);
-			}
-			listIterator_release(it3);
-
-			if (!found)
-			{
-				z->contSuccs[el->index] = zg->sinkZone;
-				z->resetsConts = NULL;
-				zone_addEdge(z, zg->sinkZone, CONTRCVD);
-				sinkZoneReached = 1;
-			}
-		}
-		listIterator_release(it2);
-
-		for (it2 = listIterator_first(a->uncontsTable) ; listIterator_hasNext(it2) 
-				; it2 = listIterator_next(it2))
-		{
-			struct SymbolTableEl *el = listIterator_val(it2);
-			struct ListIterator *it3;
-			int found = 0;
-
-			for (it3 = listIterator_first(z->s->uncontSuccs[(unsigned 
-							char)el->c]) ; listIterator_hasNext(it3) ; it3 = 
-					listIterator_next(it3))
-			{
-				struct StateEdge *se = listIterator_val(it3);
-				struct Dbmw *dbmtmp = dbmw_newcp(z->dbm);
-				if (dbmw_intersection(dbmtmp, se->dbm))
-				{
-					struct ListIterator *it4;
-					for (it4 = listIterator_first(se->resets) ; 
-							listIterator_hasNext(it4) ; it4 = 
-							listIterator_next(it4))
-					{
-						struct Clock *c = listIterator_val(it4);
-						dbmw_reset(dbmtmp, c);
-					}
-					listIterator_release(it4);
-
-					for (it4 = listIterator_first(zg->zonesS[se->to->index]) ; 
-							listIterator_hasNext(it4) ; it4 = 
-							listIterator_next(it4))
-					{
-						struct Zone *z2 = listIterator_val(it4);
-						if (dbmw_intersects(dbmtmp, z2->dbm))
-						{
-							z->uncontSuccs[el->index] = z2;
-							list_addList(z->resetsUnconts[el->index], 
-									se->resets, NULL);
-							zone_addEdge(z, z2, UNCONTRCVD);
-							found = 1;
-							break;
-						}
-					}
-					listIterator_release(it4);
-				}
-				dbmw_free(dbmtmp);
-			}
-			listIterator_release(it3);
-
-			if (!found)
-			{
-				z->uncontSuccs[el->index] = zg->sinkZone;
-				zone_addEdge(z, zg->sinkZone, UNCONTRCVD);
-				sinkZoneReached = 1;
-			}
-		}
-		listIterator_release(it2);
+		perror("malloc zoneGraph_load:zg");
+		exit(EXIT_FAILURE);
 	}
-	listIterator_release(it);
 
-	if (!sinkZoneReached)
-		list_remove(zg->zones, zg->sinkZone);
+	zg->a = g->a;
+	zg->nbZones = (unsigned int)load_uint64(f);
 
-	zg->nbZones = list_size(zg->zones);
-
-	list_free(rho, NULL);
+	z0Index = (unsigned int)load_uint64(f);
+	sinkZoneIndex = (unsigned int)load_uint64(f);
+	zg->zones = zone_loadAll(f, zg, g);
+	/* Discarded, not necessary when the graph is already computed */
+	zg->zonesS = NULL;
+	
+	zg->z0 = list_search(zg->zones, &z0Index, cmpZoneIndex);
+	if (zg->z0 == NULL)
+	{
+		fprintf(stderr, "ERROR: No zone of index %u for z0 was found\n", 
+				z0Index);
+		exit(EXIT_FAILURE);
+	}
+	zg->sinkZone = list_search(zg->zones, &sinkZoneIndex, cmpZoneIndex);
+	if (zg->sinkZone == NULL)
+	{
+		fprintf(stderr, "ERROR: No zone of index %u for sinkZone was found\n", 
+				sinkZoneIndex);
+		exit(EXIT_FAILURE);
+	}
 
 	return zg;
 }
 
-const struct List *zoneGraph_getZones(const struct ZoneGraph *zg)
-{
-	return zg->zones;
-}
-
-void zoneGraph_free(struct ZoneGraph *zg)
+static void zoneGraph_free(struct ZoneGraph *zg)
 {
 	int i;
 
-	for (i = 0 ; i < zg->a->nbStates ; i++)
+	if (zg->zonesS != NULL)
 	{
-		list_free(zg->zonesS[i], NULL);
+		for (i = 0 ; i < zg->a->nbStates ; i++)
+		{
+			list_free(zg->zonesS[i], NULL);
+		}
 	}
 
 	list_free(zg->zones, (void (*)(void *))zone_free);
@@ -2688,6 +2832,365 @@ void zoneGraph_free(struct ZoneGraph *zg)
 	free(zg);
 }
 
+/* ZoneGraph public interface */
+const struct List *zoneGraph_getZones(const struct ZoneGraph *zg)
+{
+	return zg->zones;
+}
+
+
+/* Graph */
+/* Graph private interface */
+/* Helper functions to create the graph */
+static void graph_createChars(const struct List *l, struct List **psymbolTable, 
+		char **pchars, struct SymbolTableEl *elTable[256])
+{
+	int size = list_size(l);
+	int i;
+	struct ListIterator *it;
+	char *chars;
+	struct List *symbolTable;
+	const char *symLabels = 
+		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+	*psymbolTable = list_new();
+	symbolTable = *psymbolTable;
+
+
+	if (size > 52)
+	{
+		fprintf(stderr, "Too many events (max. 52).\n");
+		exit(EXIT_FAILURE);
+	}
+
+	*pchars = malloc(size + 1);
+	chars = *pchars;
+	if (chars == NULL)
+	{
+		perror("malloc chars");
+		exit(EXIT_FAILURE);
+	}
+	strncpy(chars, symLabels, size);
+	chars[size] = '\0';
+
+	for (it = listIterator_first(l), i = 0 ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it), i++)
+	{
+		struct ParserSymbol *s = listIterator_val(it);
+		struct SymbolTableEl *el = symbolTableEl_new(chars[i], 
+				parserSymbol_getLabel(s), parserSymbol_getId(s));
+		el->index = i;
+		list_add(symbolTable, el);
+		elTable[(unsigned char)el->c] = el;
+	}
+	listIterator_release(it);
+}
+
+static struct Tree *graph_computeStrings(const struct Graph *g)
+{
+	struct Tree *t;
+	struct StringArray *root = stringArray_new(g);
+
+	t = tree_new(root);
+	graph_computeTree(t, g);
+
+	return t;
+}
+
+static void graph_computeTree(struct Tree *t, const struct Graph *g)
+{
+	struct StringArray *sap = tree_getData(t), *sa;
+	struct Tree *son;
+	int i;
+
+	for (i = 0 ; i < g->nbConts ; i++)
+	{
+		sa = stringArray_newNext(sap, g, g->contsChars[i]);
+
+		son = tree_new(sa);
+		tree_addSon(t, son);
+		if (!arraytwo_cmp(sa->array, sap->array))
+			graph_computeTree(son, g);
+	}
+}
+
+static void graph_addNodes(struct Graph *g, struct Tree *stringArrays)
+{
+	struct ListIterator *it;
+
+	for (it = listIterator_first(g->zoneGraph->zones) ; listIterator_hasNext(it) 
+			; it = listIterator_next(it))
+	{
+		struct Zone *z = listIterator_val(it);
+		graph_addNodesRec(g, z, stringArrays, NULL);
+	}
+	listIterator_release(it);
+
+	g->nbNodes = list_size(g->nodes);
+}
+
+static void graph_addNodesRec(struct Graph *g, const struct Zone *z, const 
+		struct Tree *stringArrays, struct Node *pred)
+{
+	struct StringArray *sa;
+	struct Node *n[2];
+	int i, nbSons;
+
+	sa = tree_getData(stringArrays);
+	for (i = 0 ; i < 2 ; i++)
+	{
+		n[i] = node_new(g, z, sa->s, i);
+		list_add(g->nodes, n[i]);
+		list_add(g->nodesP[i], n[i]);
+	}
+
+	node_addEdgeStop(n[0], n[1]);
+	if (pred != NULL)
+		node_addEdgeCont(pred, n[0], graph_contIndex(g, sa->s[strlen(sa->s) - 
+					1]));
+	else
+		g->baseNodes[z->index] = n[0];
+	nbSons = tree_getNbSons(stringArrays);
+	if (nbSons == 0)
+	{
+		n[0]->isLeaf = 1;
+		n[1]->isLeaf = 1;
+	}
+	for (i = 0 ; i < nbSons ; i++)
+	{
+		graph_addNodesRec(g, z, tree_getSon(stringArrays, i), n[1]);
+	}
+}
+
+static void addEmitEdges(struct Graph *g)
+{
+	struct ListIterator *it;
+	char *remain;
+	struct Node *next;
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+
+		if (n->owner == 1)
+			continue;
+
+		/* it is impossible to emit something from a node that has nothing to be 
+		 * emitted */
+		if (n->word[0] == '\0')
+			continue;
+
+		next = g->baseNodes[n->z->contSuccs[g->contsEls[(unsigned 
+				char)(n->word[0])]->index]->index];
+		remain = n->word + 1;
+
+		while (*remain != '\0')
+		{
+			next = node_succCont(g, next, *remain);
+			remain++;
+		}
+
+		node_addEdgeEmit(n, next);
+	}
+	listIterator_release(it);
+}
+
+static void addUncontEdges(struct Graph *g)
+{
+	struct ListIterator *it;
+	char *remain;
+	struct Node *next;
+	int i;
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+
+		if (n->owner == 0)
+			continue;
+
+		for (i = 0 ;  i < g->nbUnconts ; i++)
+		{
+			next = g->baseNodes[n->z->uncontSuccs[i]->index];
+
+			/* Do not loop */
+			if (next == n)
+				continue;
+
+			remain = n->word;
+
+			while (*remain != '\0')
+			{
+				next = node_succCont(g, next, *remain);
+				remain++;
+			}
+
+			node_addEdgeUncont(n, next, i);
+		}
+	}
+	listIterator_release(it);
+}
+
+static void addTimeEdges(struct Graph *g)
+{
+	struct ListIterator *it;
+	char *remain;
+	struct Node *next;
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+
+		if (n->owner == 0 || n->z->timeSucc == NULL)
+			continue;
+
+		next = g->baseNodes[n->z->timeSucc->index];
+
+		/* Do not loop */
+		if (next == n)
+			continue;
+
+		remain = n->word;
+
+		while (*remain != '\0')
+		{
+			next = node_succCont(g, next, *remain);
+			remain++;
+		}
+
+		node_addEdgeTime(n, next);
+	}
+	listIterator_release(it);
+}
+
+/* Helper function to access the index of a controllable event */
+static inline unsigned int graph_contIndex(const struct Graph *g, char c)
+{
+	return g->contsEls[(unsigned char)c]->index;
+}
+
+/* Buchi game computation */
+static void graph_computeW0(struct Graph *g, struct Set *ret)
+{
+	struct List *S = list_new();
+	struct ListIterator *it;
+	struct Set *B = set_empty(NULL);
+	struct Set *R = set_empty(NULL);
+	struct Set *Tr = set_empty(NULL);
+	struct Set *W = set_empty(NULL);
+	struct Set *Sset = set_empty(NULL);
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		list_add(S, n);
+		set_add(Sset, n);
+		if (n->isAccepting)
+			set_add(B, n);
+	}
+	listIterator_release(it);
+	set_reset(ret);
+
+	do
+	{
+		graph_attr(R, g, 0, B, S);
+
+		/* Tr = S \ B */
+		set_reset(Tr);
+		for (it = listIterator_first(S) ; listIterator_hasNext(it) ; it = 
+				listIterator_next(it))
+		{
+			set_add(Tr, listIterator_val(it));
+		}
+		listIterator_release(it);
+		set_remove(Tr, (int (*)(const void *, const void *))set_in, R);
+
+		graph_attr(W, g, 1, Tr, S);
+		removeSetFromList(S, W);
+
+		set_remove(B, (int (*)(const void *, const void *))set_in, W);
+		set_applyToAll(W, (void (*)(void *, void *))set_add, ret);
+	} while (!set_isEmpty(W));
+
+	/* ret = S \ ret */
+	set_copy(W, ret, NULL);
+	set_copy(ret, Sset, NULL);
+	set_remove(ret, (int (*)(const void *, const void *))set_in, W);
+
+	list_free(S, NULL);
+	set_free(B);
+	set_free(R);
+	set_free(Tr);
+	set_free(W);
+	set_free(Sset);
+}
+
+static void graph_attr(struct Set *ret, struct Graph *g, int player, const 
+		struct Set *U, struct List *nodes)
+{
+	int stable = 0;
+	struct ListIterator *it, *it2;
+
+	set_reset(ret);
+	set_copy(ret, U, NULL);
+
+	while (!stable)
+	{
+		stable = 1;
+
+		for (it = listIterator_first(nodes) ; listIterator_hasNext(it) ; it = 
+				listIterator_next(it))
+		{
+			struct Node *n = listIterator_val(it);
+			if (set_in(ret, n))
+				continue;
+			if (n->owner == player)
+			{
+				for (it2 = listIterator_first(n->edges) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct Edge *e = listIterator_val(it2);
+					if (listIn(nodes, e->succ) && set_in(ret, e->succ))
+					{
+						stable = 0;
+						set_add(ret, n);
+						break;
+					}
+				}
+				listIterator_release(it2);
+			}
+			/* n->owner != player */
+			else
+			{
+				int ok = 1;
+
+				for (it2 = listIterator_first(n->edges) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct Edge *e = listIterator_val(it2);
+					if (listIn(nodes, e->succ) && !set_in(ret, e->succ))
+						ok = 0;
+				}
+				listIterator_release(it2);
+
+				if (ok)
+				{
+					stable = 0;
+					set_add(ret, n);
+				}
+			}
+		}
+		listIterator_release(it);
+	}
+}
+
+/* Graph public interface */
 struct Graph *graph_newFromAutomaton(const char *filename)
 {
 	const struct List *pstates = NULL;
@@ -2696,7 +3199,6 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	const struct List *pedges = NULL;
 	const struct List *pclocks = NULL;
 	struct Tree *strings;
-	struct ListIterator *it;
 	struct Graph *g = malloc(sizeof *g);
 	struct Set *W0 = set_empty(NULL);
 	int i;
@@ -2719,7 +3221,6 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	g->nodes = list_new();
 	g->nodesP[0] = list_new();
 	g->nodesP[1] = list_new();
-	g->lastCreated = list_new();
 	g->nbConts = parser_getNbConts();
 	g->nbUnconts = parser_getNbUnconts();
 
@@ -2728,8 +3229,8 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 		g->contsEls[i] = NULL;
 		g->uncontsEls[i] = NULL;
 	}
-	createChars(pconts, &(g->contsTable), &(g->contsChars), g->contsEls);
-	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars), 
+	graph_createChars(pconts, &(g->contsTable), &(g->contsChars), g->contsEls);
+	graph_createChars(punconts, &(g->uncontsTable), &(g->uncontsChars), 
 			g->uncontsEls);
 
 	g->a = timedAutomaton_new(g->contsTable, (const struct SymbolTableEl 
@@ -2744,22 +3245,22 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 		exit(EXIT_FAILURE);
 	}
 
-	strings = computeStrings(g);
-	addNodes(g, strings);
+	strings = graph_computeStrings(g);
+	graph_addNodes(g, strings);
+	tree_free(strings, (void (*)(void *))stringArray_free);
 	addEmitEdges(g);
 	addUncontEdges(g);
 	addTimeEdges(g);
-	addEmitAllEdges(g);
-	computeW0(g, W0);
+	graph_computeW0(g, W0);
 	
 	set_applyToAll(W0, node_setWinning, NULL);
-	set_applyToAll(W0, (void (*)(void *, void *))computeStrat, NULL);
+	set_applyToAll(W0, (void (*)(void *, void *))node_computeStrat, NULL);
 	parser_cleanup();
 
 	return g;
 }
 
-const struct List *graph_nodes(const struct Graph *g)
+const struct List *graph_getNodes(const struct Graph *g)
 {
 	return g->nodes;
 }
@@ -2769,26 +3270,274 @@ const struct ZoneGraph *graph_getZoneGraph(const struct Graph *g)
 	return g->zoneGraph;
 }
 
+void graph_save(const struct Graph *g, const char *filename)
+{
+	FILE *file = fopen(filename, "w");
+	struct ListIterator *it;
+
+	if (file == NULL)
+	{
+		perror("fopen graph_save:file");
+		exit(EXIT_FAILURE);
+	}
+
+
+	save_uint64(file, (uint64_t)g->nbConts);
+	for (it = listIterator_first(g->contsTable) ; listIterator_hasNext(it) ; it 
+			= listIterator_next(it))
+	{
+		struct SymbolTableEl *s = listIterator_val(it);
+		symbolTableEl_save(s, file);
+	}
+	listIterator_release(it);
+
+	save_uint64(file, (uint64_t)g->nbUnconts);
+	for (it = listIterator_first(g->uncontsTable) ; listIterator_hasNext(it) ; 
+			it = listIterator_next(it))
+	{
+		struct SymbolTableEl *s = listIterator_val(it);
+		symbolTableEl_save(s, file);
+	}
+	listIterator_release(it);
+
+	save_uint64(file, (uint64_t)CANARY);
+
+	timedAutomaton_save(g->a, file);
+
+	save_uint64(file, (uint64_t)CANARY);
+
+	zoneGraph_save(g->zoneGraph, file);
+
+	save_uint64(file, (uint64_t)CANARY);
+
+	save_uint64(file, (uint64_t)g->nbNodes);
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		node_save(n, file);
+	}
+	listIterator_release(it);
+
+	save_uint64(file, (uint64_t)CANARY);
+
+	fclose(file);
+}
+
+struct Graph *graph_load(const char *filename)
+{
+	FILE *f;
+	struct Graph *g;
+	int i;
+	uint64_t n;
+	struct ListIterator *it;
+
+	if ((f = fopen(filename, "r")) == NULL)
+	{
+		perror("fopen graph_load");
+		exit(EXIT_FAILURE);
+	}
+
+	g = malloc(sizeof *g);
+	if (g == NULL)
+	{
+		perror("malloc graph_load:g");
+		exit(EXIT_FAILURE);
+	}
+
+	g->nbConts = (unsigned int)load_uint64(f);
+	g->contsChars = malloc(g->nbConts + 1);
+	if (g->contsChars == NULL)
+	{
+		perror("malloc graph_load:g->contsChars");
+		exit(EXIT_FAILURE);
+	}
+	g->contsTable = list_new();
+	for (i = 0 ; i < NBSUCCS ; i++)
+	{
+		g->contsEls[i] = NULL;
+	}
+	for (i = 0 ; i < g->nbConts ; i++)
+	{
+		struct SymbolTableEl *el = symbolTableEl_load(f, g);
+		list_add(g->contsTable, el);
+		g->contsEls[(unsigned char)el->c] = el;
+		g->contsChars[i] = el->c;
+	}
+
+	g->nbUnconts = (unsigned int)load_uint64(f);
+	g->uncontsChars = malloc(g->nbUnconts + 1);
+	if (g->uncontsChars == NULL)
+	{
+		perror("malloc graph_load:g->uncontsChars");
+		exit(EXIT_FAILURE);
+	}
+	g->uncontsTable = list_new();
+	for (i = 0 ; i < NBSUCCS ; i++)
+	{
+		g->uncontsEls[i] = NULL;
+	}
+	for (i = 0 ; i < g->nbUnconts ; i++)
+	{
+		struct SymbolTableEl *el = symbolTableEl_load(f, g);
+		list_add(g->uncontsTable, el);
+		g->uncontsEls[(unsigned char)el->c] = el;
+		g->uncontsChars[el->index] = el->c;
+	}
+
+	n = load_uint64(f);
+	if (n != CANARY)
+	{
+		fprintf(stderr, "ERROR: Expecting %lx after uncontrollable in file"
+			   " %s, but vaue is %lx\n", CANARY, filename, n);
+		exit(EXIT_FAILURE);
+	}
+
+	g->a = timedAutomaton_load(f, g);
+
+	n = load_uint64(f);
+	if (n != CANARY)
+	{
+		fprintf(stderr, "ERROR: Expecting %lx after timed automaton in file"
+				" %s, but value is %lx\n", CANARY, filename, n);
+		exit(EXIT_FAILURE);
+	}
+
+	g->zoneGraph = zoneGraph_load(f, g);
+	g->nbZones = g->zoneGraph->nbZones;
+
+	n = load_uint64(f);
+	if (n != CANARY)
+	{
+		fprintf(stderr, "ERROR: Expecting 0 after zone graph in file %s\n", 
+				filename);
+		exit(EXIT_FAILURE);
+	}
+
+	g->nbNodes = (unsigned int)load_uint64(f);
+	g->nodesP[0] = list_new();
+	g->nodesP[1] = list_new();
+	g->baseNodes = malloc(g->zoneGraph->nbZones * sizeof (*g->baseNodes));
+	if (g->baseNodes == NULL)
+	{
+		perror("malloc graph_newFromAutomaton:g->baseNodes");
+		exit(EXIT_FAILURE);
+	}
+
+	g->nodes = node_loadAll(f, g);
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		if (n->owner != 0 && n->owner != 1)
+		{
+			fprintf(stderr, "ERROR: owner must be 0 or 1\n");
+			exit(EXIT_FAILURE);
+		}
+		list_add(g->nodesP[n->owner], n);
+		if (n->owner == 0 && n->word[0] == '\0')
+			g->baseNodes[n->z->index] = n;
+	}
+	listIterator_release(it);
+
+	n = load_uint64(f);
+	if (n != CANARY)
+	{
+		fprintf(stderr, "ERROR: Expecting %lx after nodes (before EOF) in %s,"
+				" but value is %lx\n", CANARY, filename, n);
+		exit(EXIT_FAILURE);
+	}
+
+	if (fgetc(f) != EOF)
+	{
+		fprintf(stderr, "ERROR: Graph is loaded, but EOF is not reached\n");
+	}
+
+	fclose(f);
+
+	return g;
+}
+
 void graph_free(struct Graph *g)
 {
-	int i;
-
-	list_free(g->contsTable, (void (*)(void *))symbolTableEl_free);
-	list_free(g->uncontsTable, (void (*)(void *))symbolTableEl_free);
-	list_free(g->lastCreated, NULL);
 	list_free(g->nodesP[0], NULL);
 	list_free(g->nodesP[1], NULL);
 	list_free(g->nodes, (void (*)(void *))node_free);
+	free(g->baseNodes);
 
 	zoneGraph_free(g->zoneGraph);
 	timedAutomaton_free(g->a);
+
+	list_free(g->contsTable, (void (*)(void *))symbolTableEl_free);
+	list_free(g->uncontsTable, (void (*)(void *))symbolTableEl_free);
+
 	free(g->contsChars);
 	free(g->uncontsChars);
 	free(g);
 }
 
 
+/* Clock save/load functions (here to be static) */
+static void clock_save(const struct Clock *c, FILE *f)
+{
+	save_uint64(f, (uint64_t)clock_getIndex(c));
+	save_string(f, clock_getName(c));
+}
+
+static struct Clock *clock_load(FILE *f)
+{
+	unsigned int index = (unsigned int)load_uint64(f);
+	char *name = load_string(f);
+	struct Clock *c = clock_new(-1, index, name);
+
+	free(name);
+
+	return c;
+}
+
+
 /* Enforcer */
+/* Enforcer private interface */
+static unsigned int enforcer_computeDelay(const struct Enforcer *e)
+{
+	if (e->realNode->p0.succStopEmit->p1.succTime != NULL)
+	{
+		return dbmw_distance(e->valuation, 
+				e->realNode->p0.succStopEmit->p1.succTime->z->dbm);
+	}
+
+	return 0;
+}
+
+static void enforcer_computeStratNode(struct Enforcer *e)
+{
+	struct PrivateEvent *pe;
+	struct Fifo *fifo;
+
+	e->stratNode = e->realNode;
+	fifo = fifo_empty();
+	while (!fifo_isEmpty(e->realBuffer))
+	{
+		pe = fifo_dequeue(e->realBuffer);
+		fifo_enqueue(fifo, pe);
+
+		if (e->stratNode == e->realNode || !e->stratNode->isWinning)
+		{
+			while (e->stratNode->isLeaf)
+				e->stratNode = e->stratNode->p0.succEmit;
+			e->stratNode = e->stratNode->p0.succStopEmit
+				->p1.succsCont[graph_contIndex(e->g, pe->c)];
+		}
+	}
+
+	if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
+		e->stratNode = e->realNode->p0.succEmit;
+
+	fifo_free(e->realBuffer);
+	e->realBuffer = fifo;
+}
+
+/* Enforcer public interface */
 struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 {
 	struct Node *initialNode;
@@ -2839,7 +3588,7 @@ enum Strat enforcer_getStrat(const struct Enforcer *e)
 {
 	fprintf(e->log, "enforcer_getStrat: ");
 	fprintf(e->log, "(%s, %s) - (%s, %s)", e->realNode->z->name, 
-			e->realNode->sa->s, e->stratNode->z->name, e->stratNode->sa->s);
+			e->realNode->word, e->stratNode->z->name, e->stratNode->word);
 	fprintf(e->log, "- strat: %s\n", (e->stratNode->isWinning && e->stratNode != 
 				e->realNode) ? "emit" : "dontemit");
 	fprintf(e->log, "%d\n", e->stratNode->owner);
@@ -2848,51 +3597,12 @@ enum Strat enforcer_getStrat(const struct Enforcer *e)
 	return STRAT_DONTEMIT;
 }
 
-static void enforcer_computeStratNode(struct Enforcer *e)
-{
-	struct PrivateEvent *pe;
-	struct Fifo *fifo;
-
-	e->stratNode = e->realNode;
-	fifo = fifo_empty();
-	while (!fifo_isEmpty(e->realBuffer))
-	{
-		pe = fifo_dequeue(e->realBuffer);
-		fifo_enqueue(fifo, pe);
-
-		if (e->stratNode == e->realNode || !e->stratNode->isWinning)
-		{
-			while (e->stratNode->isLeaf)
-				e->stratNode = e->stratNode->p0.succEmit;
-			e->stratNode = e->stratNode->p0.succStopEmit
-				->p1.succsCont[contIndex(e->g, pe->c)];
-		}
-	}
-
-	if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
-		e->stratNode = e->realNode->p0.succEmit;
-
-	fifo_free(e->realBuffer);
-	e->realBuffer = fifo;
-}
-
-static unsigned int enforcer_computeDelay(const struct Enforcer *e)
-{
-	if (e->realNode->p0.succStopEmit->p1.succTime != NULL)
-		return dbmw_distance(e->valuation, 
-				e->realNode->p0.succStopEmit->p1.succTime->z->dbm);
-
-	return 0;
-}
-
 unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 {
 	struct SymbolTableEl *el;
 	char c;
 	struct PrivateEvent *pe;
 	struct TimedEvent *te;
-	struct Fifo *fifo;
-
 
 	el = list_search(e->g->contsTable, event->label, cmpSymbolLabel);
 	if (el != NULL)
@@ -2978,7 +3688,7 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 	}
 	fprintf(e->log, "Event received : (%u, %s)\n", e->date, event->label);
 	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
-			e->realNode->sa->s, e->stratNode->z->name, e->stratNode->sa->s);
+			e->realNode->word, e->stratNode->z->name, e->stratNode->word);
 
 	return enforcer_computeDelay(e);
 }
@@ -2986,22 +3696,21 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 unsigned int enforcer_emit(struct Enforcer *e)
 {
 	struct PrivateEvent *pe;
-	char *label;
 	struct SymbolTableEl *sym;
 	struct TimedEvent *te;
 	struct ListIterator *it;
 
-	if (e->realNode->sa->s[0] == '\0')
+	if (e->realNode->word[0] == '\0')
 	{
 		fprintf(e->log, "ERROR: cannot emit with an empty buffer.\n");
 		exit(EXIT_FAILURE);
 	}
 	
-	sym = e->g->contsEls[(unsigned char)e->realNode->sa->s[0]];
+	sym = e->g->contsEls[(unsigned char)e->realNode->word[0]];
 	if (sym == NULL)
 	{
 		fprintf(e->log, "ERROR: could not find symbol associated to char %c\n", 
-				e->realNode->sa->s[0]);
+				e->realNode->word[0]);
 		exit(EXIT_FAILURE);
 	}
 
@@ -3019,7 +3728,7 @@ unsigned int enforcer_emit(struct Enforcer *e)
 
 	for (it = listIterator_first( 
 				e->realNode->z->resetsConts[e->g->contsEls[(unsigned 
-					char)e->realNode->sa->s[0]]->index]) ; 
+					char)e->realNode->word[0]]->index]) ; 
 			listIterator_hasNext(it) ; it = listIterator_next(it))
 	{
 		struct Clock *c = listIterator_val(it);
@@ -3037,7 +3746,7 @@ unsigned int enforcer_emit(struct Enforcer *e)
 		enforcer_computeStratNode(e);
 
 	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
-			e->realNode->sa->s, e->stratNode->z->name, e->stratNode->sa->s);
+			e->realNode->word, e->stratNode->z->name, e->stratNode->word);
 
 	return enforcer_computeDelay(e);
 }
@@ -3097,7 +3806,7 @@ void enforcer_free(struct Enforcer *e)
 	fifo_free(e->output);
 
 	fprintf(e->log, "\nRemaining events in the buffer: ");
-	s = e->realNode->sa->s;
+	s = e->realNode->word;
 	while (*s != '\0')
 	{
 		struct SymbolTableEl *el = e->g->contsEls[(unsigned char)*(s++)];
@@ -3119,6 +3828,7 @@ void enforcer_free(struct Enforcer *e)
 	}
 	fprintf(e->log, "\n");
 	fifo_free(e->realBuffer);
+	free(e->valuation);
 
 	fprintf(e->log, "VERDICT: %s\n", (e->realNode->isAccepting) ? "WIN" : 
 			"LOSS");

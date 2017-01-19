@@ -221,7 +221,7 @@ unsigned int dbmw_distance(const int32_t *val, const struct Dbmw *to)
 			d++;
 		if (val[i] > -dbm_raw2bound(to->dbm[i]))
 		{
-			fprintf(stderr, "Error: %d > %d\n", val[i], 
+			fprintf(stderr, "ERROR: %d > %d\n", val[i], 
 					-dbm_raw2bound(to->dbm[i]));
 			return -1;
 		}
@@ -261,11 +261,13 @@ static void dbmw_reduce(struct Dbmw *z)
 	dbmw_free(res);
 }
 
+#if 0
 static struct Dbmw *dbmw_merge(const struct Dbmw *z1, const struct Dbmw *z2)
 {
 	int mergeable = 1;
 	int m, n;
 }
+#endif
 
 /**
  * Compute the subtraction of two zones. Since zones need to be convex, 
@@ -460,7 +462,6 @@ struct Dbmw *dbmw_upTo(const struct Dbmw *Z0, const struct Dbmw *Z1)
 	struct Dbmw *z0 = dbmw_newcp(Z0), *z1 = dbmw_newcp(Z1);
 	struct Dbmw *ret = NULL;
 	struct ListIterator *it;
-	int i, j, n = Z0->dim;
 
 	dbmw_up(z0);
 	dbmw_down(z1);
@@ -695,6 +696,75 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 	s += sprintf(s, "}");
 
 	return s0;
+}
+
+static void save_uint32(FILE *f, uint32_t n)
+{
+	int i;
+
+	for (i = 0 ; i < sizeof n ; i++)
+	{
+		fprintf(f, "%c", (char)(n >> (i * 8)) & 0xff);
+	}
+}
+
+static uint32_t load_uint32(FILE *f)
+{
+	uint32_t n = 0;
+	int i;
+
+	for (i = 0 ; i < sizeof n ; i++)
+	{
+		uint32_t c = fgetc(f);
+		if ((int32_t)c == EOF)
+		{
+			fprintf(stderr, "ERROR: EOF reached while parsing uint32\n");
+			exit(EXIT_FAILURE);
+		}
+		c &= 0xff;
+		n |= c << (i * 8);
+	}
+
+	return n;
+}
+
+void dbmw_save(const struct Dbmw *z, FILE *f)
+{
+	int i, j;
+
+	save_uint32(f, (uint32_t)z->dim);
+	for (i = 0 ; i < z->dim ; i++)
+	{
+		for (j = 0 ; j < z->dim ; j++)
+		{
+			save_uint32(f, (uint32_t)(dbm_rawIsStrict(z->dbm[i * z->dim + j]) != 
+						0));
+			save_uint32(f, (uint32_t)(dbm_raw2bound(z->dbm[i * z->dim + j])));
+		}
+	}
+}
+
+struct Dbmw *dbmw_load(FILE *f)
+{
+	int i, j;
+	uint32_t dim, strict;
+	int32_t bound;
+	struct Dbmw *ret;
+
+	dim = load_uint32(f);
+	ret = dbmw_new(dim);
+	
+	for (i = 0 ; i < dim ; i++)
+	{
+		for (j = 0 ; j < dim ; j++)
+		{
+			strict = load_uint32(f);
+			bound = (int32_t)load_uint32(f);
+			ret->dbm[i * dim + j] = dbm_boundbool2raw(bound, strict);
+		}
+	}
+
+	return ret;
 }
 
 void dbmw_free(struct Dbmw *d)

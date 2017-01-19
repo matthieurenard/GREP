@@ -105,6 +105,7 @@ static char *edgeName(const struct Edge *e, int i)
 	return name;
 }
 
+#if 0
 static char *zoneName(const struct Node *n)
 {
 	int size = 4; /* = strlen("(, )") */
@@ -131,6 +132,7 @@ static char *zoneName(const struct Node *n)
 
 	return name;
 }
+#endif
 
 static char *zoneEdgeName(const struct ZoneEdge *e, int i)
 {
@@ -179,7 +181,7 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 {
 	Agraph_t *gviz;
 	GVC_t *gvc;
-	Agnode_t *gnode, *gdest;
+	Agnode_t *gnode;
 	Agedge_t *gedge;
 	struct ListIterator *it;
 	struct Node *n;
@@ -202,7 +204,7 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 	agattr(gviz, AGNODE, "peripheries", "1");
 	agattr(gviz, AGEDGE, "color", "black");
 
-	for (it = listIterator_first(graph_nodes(g)) ; listIterator_hasNext(it) ; it 
+	for (it = listIterator_first(graph_getNodes(g)) ; listIterator_hasNext(it) ; it 
 			= listIterator_next(it))
 	{
 		n = listIterator_val(it);
@@ -262,7 +264,7 @@ void drawZoneGraph(const struct ZoneGraph *zg, FILE *outFile)
 {
 	Agraph_t *gviz;
 	GVC_t *gvc;
-	Agnode_t *gnode, *gdest;
+	Agnode_t *gnode;
 	Agedge_t *gedge;
 	struct ListIterator *it;
 	struct Zone *z;

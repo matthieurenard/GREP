@@ -31,8 +31,10 @@ struct Event
 };
 
 struct Graph *graph_newFromAutomaton(const char *filename);
+const struct List *graph_getNodes(const struct Graph *);
 const struct ZoneGraph *graph_getZoneGraph(const struct Graph *);
-const struct List *graph_nodes(const struct Graph *);
+void graph_save(const struct Graph *, const char *);
+struct Graph *graph_load(const char *);
 void graph_free(struct Graph *);
 
 const char *node_stateLabel(const struct Node *);

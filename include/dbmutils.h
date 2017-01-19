@@ -42,6 +42,9 @@ struct Dbmw *dbmw_upTo(const struct Dbmw *, const struct Dbmw *);
 void dbmw_print(FILE *, const struct Dbmw *, struct Clock ** const);
 char *dbmw_sprint(const struct Dbmw *, struct Clock ** const);
 
+void dbmw_save(const struct Dbmw *, FILE *);
+struct Dbmw *dbmw_load(FILE *);
+
 void dbmw_free(struct Dbmw *);
 
 /* For debugging, should be static */
