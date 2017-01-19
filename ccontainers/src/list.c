@@ -35,6 +35,11 @@ struct List *list_new()
 	return list_init(l);
 }
 
+struct List *list_newcp(const struct List *other, void *(*cp)(void *))
+{
+	return list_addList(list_new(), other, cp);
+}
+
 void list_free(struct List *l, void (*clean)(void *))
 {
 	struct Element *e, *next;
@@ -86,6 +91,21 @@ struct List *list_add(struct List *l, void *data)
 	l->size++;
 
 	return l;
+}
+
+struct List *list_addList(struct List *dst, const struct List *src, void *(*cp)(void *))
+{
+	const struct Element *el;
+
+	for (el = src->head ; el != NULL ; el = el->next)
+	{
+		if (cp != NULL)
+			list_add(dst, cp(el->data));
+		else
+			list_add(dst, el->data);
+	}
+
+	return dst;
 }
 
 struct List *list_remove(struct List *l, void *data)

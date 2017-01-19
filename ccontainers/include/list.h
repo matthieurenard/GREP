@@ -5,9 +5,12 @@ struct List;
 struct ListIterator;
 
 struct List* list_new();
+struct List *list_newcp(const struct List *, void *(*)(void *));
 void list_free(struct List *, void (*)(void *));
 struct List* list_init(struct List *);
 struct List *list_add(struct List *, void *data);
+struct List *list_addList(struct List *, const struct List *, void *(*)(void 
+			*));
 struct List *list_remove(struct List *, void *data);
 void list_cleanup(struct List *, void (*)(void *));
 int list_isEmpty(const struct List *);
