@@ -19,11 +19,13 @@ struct Dbmw *dbmw_down(struct Dbmw *);
 struct Dbmw *dbmw_freeClock(struct Dbmw *, const struct Clock *);
 
 int dbmw_intersection(struct Dbmw *, const struct Dbmw *);
-int dbmw_isSubseteq(const struct Dbmw *, const struct Dbmw *);
+int dbmw_isSubsetEq(const struct Dbmw *, const struct Dbmw *);
+int dbmw_isSupersetEq(const struct Dbmw *, const struct Dbmw *);
 int dbmw_intersects(const struct Dbmw *, const struct Dbmw *);
 int dbmw_areEqual(const struct Dbmw *, const struct Dbmw *);
 int dbmw_isEmpty(const struct Dbmw *);
 int dbmw_containsZero(const struct Dbmw *);
+int dbmw_isPointIncluded(const int32_t *, const struct Dbmw *);
 
 struct Dbmw *dbmw_reset(struct Dbmw *, struct Clock *);
 struct Dbmw *dbmw_constrainClock(struct Dbmw *, struct Clock *, int32_t);
@@ -40,6 +42,9 @@ void dbmw_print(FILE *, const struct Dbmw *, struct Clock ** const);
 char *dbmw_sprint(const struct Dbmw *, struct Clock ** const);
 
 void dbmw_free(struct Dbmw *);
+
+/* For debugging, should be static */
+struct List *dbmw_subtract(const struct Dbmw *, const struct Dbmw *);
 
 #endif
 

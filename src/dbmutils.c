@@ -90,9 +90,14 @@ int dbmw_intersection(struct Dbmw *d1, const struct Dbmw *d2)
 	return dbm_intersection(d1->dbm, d2->dbm, d1->dim);
 }
 
-int dbmw_isSubseteq(const struct Dbmw *d1, const struct Dbmw *d2)
+int dbmw_isSubsetEq(const struct Dbmw *d1, const struct Dbmw *d2)
 {
 	return dbm_isSubsetEq(d1->dbm, d2->dbm, d1->dim);
+}
+
+int dbmw_isSupersetEq(const struct Dbmw *d1, const struct Dbmw *d2)
+{
+	return dbm_isSupersetEq(d1->dbm, d2->dbm, d1->dim);
 }
 
 int dbmw_intersects(const struct Dbmw *dbm1, const struct Dbmw *dbm2)
@@ -121,6 +126,11 @@ int dbmw_containsZero(const struct Dbmw *dbm)
 	return dbm_hasZero(dbm->dbm, dbm->dim);
 }
 
+int dbmw_isPointIncluded(const int32_t *val, const struct Dbmw *dbm)
+{
+	return dbm_isPointIncluded(val, dbm->dbm, dbm->dim);
+}
+
 struct Dbmw *dbmw_reset(struct Dbmw *d, struct Clock *c)
 {
 	dbm_updateValue(d->dbm, d->dim, clock_getIndex(c), 0);
@@ -136,7 +146,7 @@ struct Dbmw *dbmw_constrainClock(struct Dbmw *d, struct Clock *c, int32_t val)
 }
 
 struct Dbmw *dbmw_constrain(struct Dbmw *d, struct Clock *c1, struct Clock *c2, 
-		int32_t bound, raw_t strict)
+		int32_t bound, int strict)
 {
 	dbm_constrain1(d->dbm, d->dim, (c1 == NULL) ? 0 : clock_getIndex(c1), (c2 == 
 				NULL) ? 0 : clock_getIndex(c2), dbm_boundbool2raw(bound, 
@@ -195,6 +205,42 @@ unsigned int dbmw_nextPoint(struct Dbmw *dst, const struct Dbmw *from)
 	return max;
 }
 
+/* Reduce the number of elements that are bounded, i.e. give a DBM that 
+ * represents the same zone, but may be not closed, and has a minimal number of 
+ * bounds */
+static void dbmw_reduce(struct Dbmw *z)
+{
+	struct Dbmw *tmp = dbmw_newcp(z);
+	struct Dbmw *res = dbmw_newcp(z);
+	int i, j, n;
+
+	n = z->dim;
+
+	for (i = 0 ; i < n ; i++)
+	{
+		for (j = 0 ; j < n ; j++)
+		{
+			tmp->dbm[i * n + j] = dbm_LS_INFINITY;
+			dbm_close(tmp->dbm, n);
+			if (dbmw_areEqual(tmp, z))
+				res->dbm[i * n + j] = dbm_LS_INFINITY;
+			else
+				dbmw_copy(tmp, res);
+		}
+	}		
+
+	dbmw_copy(z, res);
+
+	dbmw_free(tmp);
+	dbmw_free(res);
+}
+
+static struct Dbmw *dbmw_merge(const struct Dbmw *z1, const struct Dbmw *z2)
+{
+	int mergeable = 1;
+	int m, n;
+}
+
 /**
  * Compute the subtraction of two zones. Since zones need to be convex, 
  * complementing a zone may not give a zone. Thus, the result of this 
@@ -204,7 +250,7 @@ unsigned int dbmw_nextPoint(struct Dbmw *dst, const struct Dbmw *from)
  */
 struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 {
-	struct Dbmw *Ztmp, *Zprev = NULL, *Z;
+	struct Dbmw *Ztmp = NULL, *Zinter = NULL, *Zremain;
 	int i, j, n;
 	struct List *ret = list_new();
 
@@ -215,49 +261,41 @@ struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 		exit(EXIT_FAILURE);
 	}
 
+	Zinter = dbmw_newcp(Z0);
+	dbmw_intersection(Zinter, Z1);
+	dbmw_reduce(Zinter);
+	Zremain = dbmw_newcp(Z0);
+
 	n = Z0->dim;
 	Ztmp = dbmw_new(n);
-	Z = dbmw_new(n);
 	
 	for (i = 0 ; i < n ; i++)
 	{
 		for (j = 0 ; j < n ; j++)
 		{
-			constraint_t constraint;
+			constraint_t constraint, negConstraint;
+
 			if (i == j)
 				continue;
+
 			dbmw_init(Ztmp);
 
-			constraint = dbm_constraint2(i, j, dbm_raw2bound(Z1->dbm[i * n + 
-						j]), dbm_rawIsStrict(Z1->dbm[i * n + j]));
-			constraint = dbm_negConstraint(constraint);
-			dbm_constrainC(Ztmp->dbm, Ztmp->dim, constraint);
-			dbmw_intersection(Ztmp, Z0);
-			constraint = dbm_constraint2(i, j, dbm_raw2bound(Ztmp->dbm[i * n + 
-						j]), dbm_rawIsStrict(Ztmp->dbm[i * n + j]));
+			constraint = dbm_constraint2(i, j, dbm_raw2bound(Zinter->dbm[i * n + 
+						j]), dbm_rawIsStrict(Zinter->dbm[i * n + j]));
+			negConstraint = dbm_negConstraint(constraint);
 
-			/* Zprev is composed of previous Ztmp, thus it should be OK to do 
-			 * this (Zprev[i][j] should be inf) */
-			if (Zprev != NULL)
+			if (dbm_constrainC(Ztmp->dbm, Ztmp->dim, negConstraint) &&
+					dbmw_intersection(Ztmp, Zremain))
 			{
-				dbmw_copy(Z, Zprev);
-				if (dbm_constrainC(Z->dbm, n, constraint))
-					dbm_constrainC(Zprev->dbm, n, constraint);
-				else
-				{
-					Zprev = Ztmp;
-					list_add(ret, Zprev);
-					Ztmp = dbmw_new(n);
-				}
-			}
-			else
-			{
-				Zprev = Ztmp;
-				list_add(ret, Zprev);
+				list_add(ret, Ztmp);
 				Ztmp = dbmw_new(n);
+				if (dbm_constrainC(Ztmp->dbm, Ztmp->dim, constraint))
+					dbmw_intersection(Zremain, Ztmp);
 			}
 		}
 	}
+
+	dbmw_free(Ztmp);
 
 	return ret;
 }
@@ -277,8 +315,16 @@ struct List *dbmw_partition2(const struct Dbmw *Z0, const struct Dbmw *Z1)
 	struct List *l;
 	struct ListIterator *it;
 
-	dbmw_intersection(dbm, Z1);
-	list_add(ret, dbm);
+	if (dbmw_intersection(dbm, Z1))
+		list_add(ret, dbm);
+	else
+	{
+		dbmw_free(dbm);
+		list_add(ret, dbmw_newcp(Z0));
+		list_add(ret, dbmw_newcp(Z1));
+		return ret;
+	}
+
 	l = dbmw_subtract(Z0, Z1);
 	for (it = listIterator_first(l) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
@@ -297,6 +343,7 @@ struct List *dbmw_partition2(const struct Dbmw *Z0, const struct Dbmw *Z1)
 		list_add(ret, dbm);
 	}
 	listIterator_release(it);
+
 	list_free(l, NULL);
 
 	return ret;
@@ -331,7 +378,7 @@ struct List *dbmw_partition(const struct List *zones)
 		struct Dbmw *Z = fifo_dequeue(wait);
 		struct Dbmw *Zi;
 
-		fprintf(stderr, "Z = %s\n", dbmw_sprint(Z, clocks));
+		//fprintf(stderr, "Z = %s\n", dbmw_sprint(Z, clocks));
 
 		changed = 0;
 
@@ -384,10 +431,43 @@ struct List *dbmw_partition(const struct List *zones)
  */
 struct Dbmw *dbmw_upTo(const struct Dbmw *Z0, const struct Dbmw *Z1)
 {
-	struct Dbmw *ret = dbmw_newcp(Z1);
-	dbm_relaxDown(ret->dbm, ret->dim);
-	dbmw_intersection(ret, Z0);
-	dbmw_intersection(dbmw_down(ret), Z0);
+	struct Dbmw *z0 = dbmw_newcp(Z0), *z1 = dbmw_newcp(Z1);
+	struct Dbmw *ret = NULL;
+	struct ListIterator *it;
+	int i, j, n = Z0->dim;
+
+	dbmw_up(z0);
+	dbmw_down(z1);
+
+	if (dbmw_intersection(z0, z1))
+	{
+		struct List *l = dbmw_subtract(z0, Z1);
+		int ok = 1;
+		for (it = listIterator_first(l) ; listIterator_hasNext(it) ; it = 
+				listIterator_next(it))
+		{
+			struct Dbmw *z = listIterator_val(it);
+
+			if (!dbmw_isSubsetEq(z, Z0))
+				ok = 0;
+		}
+		listIterator_release(it);
+
+		if (ok)
+		{
+			ret = dbmw_newcp(Z0);
+			if (!dbmw_intersection(ret, z1))
+			{
+				dbmw_free(ret);
+				ret = NULL;
+			}
+		}
+
+		list_free(l, (void (*)(void *))dbmw_free);
+	}
+
+	dbmw_free(z0);
+	dbmw_free(z1);
 	
 	return ret;
 }
@@ -396,6 +476,12 @@ void dbmw_print(FILE *f, const struct Dbmw *d, struct Clock **const clocks)
 {
 	int i, j;
 	int first = 1;
+
+	if (dbm_isEqualToInit(d->dbm, d->dim))
+	{
+		fprintf(f, "T");
+		return;
+	}
 
 	fprintf(f, "{");
 
@@ -440,14 +526,18 @@ void dbmw_print(FILE *f, const struct Dbmw *d, struct Clock **const clocks)
 
 			if (bound != dbm_INFINITY)
 			{
+				int li = (bound < 0) ? j : i;
+				int ri = (bound < 0) ? i : j;
 				if (!first)
 					fprintf(f, ",");
 				else
 					first = 0;
 
-				fprintf(f, "%s - %s ", clock_getName(clocks[j]), clock_getName(clocks[i]));
-				fprintf(f, ">%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-				fprintf(f, "%d", -bound);
+				fprintf(f, "%s - %s ", clock_getName(clocks[li]), 
+						clock_getName(clocks[ri]));
+				fprintf(f, "%s%s ", (bound < 0) ? ">" : "<", 
+						dbm_rawIsWeak(constraint) ? "=" : "");
+				fprintf(f, "%d", (bound < 0) ? -bound : bound);
 			}
 
 			constraint = d->dbm[j * d->dim + i]; // d[j,i]
@@ -455,14 +545,18 @@ void dbmw_print(FILE *f, const struct Dbmw *d, struct Clock **const clocks)
 
 			if (bound != dbm_INFINITY)
 			{
+				int li = (bound < 0) ? i : j;
+				int ri = (bound < 0) ? j : i;
 				if (!first)
 					fprintf(f, ",");
 				else
 					first = 0;
 
-				fprintf(f, "%s - %s ", clock_getName(clocks[j]), clock_getName(clocks[i]));
-				fprintf(f, "<%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-				fprintf(f, "%d", bound);
+				fprintf(f, "%s - %s ", clock_getName(clocks[li]), 
+						clock_getName(clocks[ri]));
+				fprintf(f, "%s%s ", (bound < 0) ? ">" : "<", 
+						dbm_rawIsWeak(constraint) ? "=" : "");
+				fprintf(f, "%d", (bound < 0) ? -bound : bound);
 			}
 		}
 	}
@@ -473,9 +567,22 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 {
 	int i, j;
 	int first = 1;
-	char *s0 = malloc(512);
-	char *s = s0;
+	char *s0;
+	char *s;
 
+	if (dbm_isEqualToInit(d->dbm, d->dim))
+	{
+		return strdup("T");
+	}
+
+	s0 = malloc(512);
+	if (s0 == NULL)
+	{
+		perror("malloc dbmw_sprint:s0");
+		exit(EXIT_FAILURE);
+	}
+
+	s = s0;
 	for (i = 0 ; i < 512 ; i++)
 		s[i] = '\0';
 
@@ -525,15 +632,18 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 
 			if (bound != dbm_INFINITY)
 			{
+				int li = (bound < 0) ? j : i;
+				int ri = (bound < 0) ? i : j;
 				if (!first)
 					s += sprintf(s, ",");
 				else
 					first = 0;
 
-				s += sprintf(s, "%s - %s ", clock_getName(clocks[j]), 
-						clock_getName(clocks[i]));
-				s += sprintf(s, ">%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-				s += sprintf(s, "%d", -bound);
+				s += sprintf(s, "%s - %s ", clock_getName(clocks[li]), 
+						clock_getName(clocks[ri]));
+				s += sprintf(s, "%s%s ", (bound < 0) ? ">" : "<", 
+						dbm_rawIsWeak(constraint) ? "=" : "");
+				s += sprintf(s, "%d", (bound < 0) ? -bound : bound);
 			}
 
 			constraint = d->dbm[j * d->dim + i]; // d[j,i]
@@ -541,15 +651,18 @@ char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 
 			if (bound != dbm_INFINITY)
 			{
+				int li = (bound < 0) ? i : j;
+				int ri = (bound < 0) ? j : i;
 				if (!first)
 					s += sprintf(s, ",");
 				else
 					first = 0;
 
-				s += sprintf(s, "%s - %s ", clock_getName(clocks[j]), 
-						clock_getName(clocks[i]));
-				s += sprintf(s, "<%s ", dbm_rawIsWeak(constraint) ? "=" : "");
-				s += sprintf(s, "%d", bound);
+				s += sprintf(s, "%s - %s ", clock_getName(clocks[li]), 
+						clock_getName(clocks[ri]));
+				s += sprintf(s, "%s%s ", (bound < 0) ? ">" : "<", 
+						dbm_rawIsWeak(constraint) ? "=" : "");
+				s += sprintf(s, "%d", (bound < 0) ? -bound : bound);
 			}
 		}
 	}

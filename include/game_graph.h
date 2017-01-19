@@ -6,6 +6,8 @@
 
 struct Node;
 struct Graph;
+struct Zone;
+struct ZoneGraph;
 struct Enforcer;
 
 enum EdgeType {EMIT, STOPEMIT, CONTRCVD, UNCONTRCVD, TIMELPSD};
@@ -17,12 +19,19 @@ struct Edge
 	struct Node *succ;
 };
 
+struct ZoneEdge
+{
+	enum EdgeType type;
+	const struct Zone *succ;
+};
+
 struct Event
 {
 	const char *label;
 };
 
 struct Graph *graph_newFromAutomaton(const char *filename);
+const struct ZoneGraph *graph_getZoneGraph(const struct Graph *);
 const struct List *graph_nodes(const struct Graph *);
 void graph_free(struct Graph *);
 
@@ -38,10 +47,18 @@ void node_setData(struct Node *, void *);
 void *node_getData(const struct Node *);
 const struct List *node_edges(const struct Node *);
 
+const struct List *zoneGraph_getZones(const struct ZoneGraph *);
+
+const struct List *zone_getEdges(const struct Zone *);
+char *zone_getName(const struct Zone *);
+void zone_setData(struct Zone *, void *);
+void *zone_getData(const struct Zone *);
+
 struct Enforcer *enforcer_new(const struct Graph *, FILE *);
 enum Strat enforcer_getStrat(const struct Enforcer *);
 void enforcer_eventRcvd(struct Enforcer *, const struct Event *);
 void enforcer_emit(struct Enforcer *);
+void enforcer_delay(struct Enforcer *, unsigned int);
 void enforcer_free(struct Enforcer *);
 
 #endif

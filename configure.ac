@@ -4,7 +4,7 @@
 AC_PREREQ([2.69])
 AC_INIT([enfrocer_game], [1.0], [mrenard@labri.fr])
 AC_CONFIG_AUX_DIR([autotools])
-AM_INIT_AUTOMAKE([-Wall -Werror foreign])
+AM_INIT_AUTOMAKE([subdir-objects -Wall -Werror foreign])
 AC_CONFIG_SRCDIR([src/print_game.c])
 AC_CONFIG_HEADERS([config.h])
 
@@ -51,5 +51,8 @@ AC_TYPE_SIZE_T
 AC_CHECK_FUNCS([strdup])
 
 AC_CONFIG_FILES([Makefile
-				 src/Makefile])
+				 src/Makefile
+				 src/offline/Makefile
+				 src/online/Makefile
+				])
 AC_OUTPUT
