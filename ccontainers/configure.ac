@@ -3,7 +3,7 @@
 
 AC_PREREQ([2.69])
 AC_INIT([ccontainers], [1.0], [mrenard@labri.fr])
-AC_CONFIG_AUX_DIR([.])
+AC_CONFIG_AUX_DIR([autotools])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_CONFIG_SRCDIR([include/set.h])
 AC_CONFIG_HEADERS([config.h])
