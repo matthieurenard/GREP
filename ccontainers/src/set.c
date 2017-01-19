@@ -95,8 +95,8 @@ int set_add(struct Set *s, void *data)
 
 	if (s->size >= s->allocSize)
 	{
-		s->allocSize = (s->allocSize * 2 > MAX_ADDED_SIZE) ? MAX_ADDED_SIZE : 
-						s->allocSize * 2;
+		s->allocSize = (s->allocSize * 2 > MAX_ADDED_SIZE) ? s->allocSize + 
+			MAX_ADDED_SIZE : s->allocSize * 2;
 		s->tab = realloc(s->tab, s->allocSize * sizeof *s->tab);
 		if (s->tab == NULL)
 		{
