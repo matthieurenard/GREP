@@ -43,38 +43,50 @@ struct Set *set_empty(int (*cmp)(const void *, const void *))
 	return ret;
 }
 
-struct Set *set_copy(const struct Set *src, void * (*cp)(void *))
+struct Set *set_newCopy(const struct Set *src, void * (*cp)(void *))
 {
 	struct Set *ret = set_empty(src->cmp);
+
+	return set_copy(ret, src, cp);
+}
+
+struct Set *set_copy(struct Set *dst, const struct Set *src, void * (*cp)(void *))
+{
 	int i;
 
-	ret->tab = realloc(ret->tab, src->allocSize);
-	if (ret->tab == NULL)
+	if (dst->allocSize < src->allocSize)
 	{
-		perror("realloc set tab");
-		exit(EXIT_FAILURE);
+
+		dst->tab = realloc(dst->tab, src->allocSize * sizeof *dst->tab);
+		if (dst->tab == NULL)
+		{
+			perror("realloc set tab");
+			exit(EXIT_FAILURE);
+		}
+
+		dst->allocSize = src->allocSize;
 	}
 
-	ret->size = src->size;
-	ret->allocSize = src->allocSize;
+	dst->size = src->size;
 
 	if (cp == NULL)
 	{
 		for (i = 0 ; i < src->size ; i++)
 		{
-			ret->tab[i] = src->tab[i];
+			dst->tab[i] = src->tab[i];
 		}
 	}
 	else
 	{
-		for (i = 0 ; i < ret->size ; i++)
+		for (i = 0 ; i < dst->size ; i++)
 		{
-			ret->tab[i] = cp(src->tab[i]);
+			dst->tab[i] = cp(src->tab[i]);
 		}
 	}
 
-	return ret;
+	return dst;
 }
+
 
 int set_add(struct Set *s, void *data)
 {
@@ -85,7 +97,7 @@ int set_add(struct Set *s, void *data)
 	{
 		s->allocSize = (s->allocSize * 2 > MAX_ADDED_SIZE) ? MAX_ADDED_SIZE : 
 						s->allocSize * 2;
-		s->tab = realloc(s->tab, s->allocSize);
+		s->tab = realloc(s->tab, s->allocSize * sizeof *s->tab);
 		if (s->tab == NULL)
 		{
 			perror("realloc set tab");
@@ -149,6 +161,16 @@ struct Set *set_reset(struct Set *s)
 	s->size = 0;
 
 	return s;
+}
+
+void set_applyToAll(const struct Set *s, void (*f)(void *, void *), void *ref)
+{
+	int i;
+
+	for (i = 0 ; i < s->size ; i++)
+	{
+		f(ref, s->tab[i]);
+	}
 }
 
 int set_allSatisfy(const struct Set *s, int (*pred)(void *))
