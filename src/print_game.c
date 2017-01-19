@@ -10,6 +10,9 @@
 
 
 #define NBSUCCS			256
+#define MAXNBEDGES		4
+
+enum EdgeType {SUCCEMIT, SUCCSTOPEMIT, SUCCRECCONT, SUCCRECUNCONT};
 
 
 struct State
@@ -22,13 +25,41 @@ struct State
 	struct State *uncontsSuccs[NBSUCCS];
 };
 
-typedef struct
+typedef struct Node
 {
-	Agrec_t h;
 	struct State *q;
 	char *word;
 	int owner;
+	union
+	{
+		struct
+		{
+			struct Node *succEmit;
+			struct Node *succStopEmit;
+		} p0;
+		struct
+		{
+			struct Node **succsCont;
+			struct Node **succsUncont;
+		} p1;
+	};
+	char *name;
+	int isAccepting;
+	int isInitial;
 } Node;
+
+struct VizNode
+{
+	Agrec_t h;
+	struct Node *n;
+};
+
+struct SearchNode
+{
+	struct State *q;
+	char *word;
+	int owner;
+};
 
 struct SymbolTableEl
 {
@@ -37,33 +68,45 @@ struct SymbolTableEl
 	char c;
 };
 
-struct List *contsTable;
-struct List *uncontsTable;
-char *contsChars;
-char *uncontsChars;
-struct List *states;
-const char *symLabels = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+struct Graph
+{
+	struct List *contsTable;
+	struct List *uncontsTable;
+	char *contsChars;
+	char *uncontsChars;
+	struct List *states;
+	struct List *nodes;
+	struct List *nodesP[2];
+};
 
 
-int cmpSymbolChar(void *val, void *pel)
+static int cmpSymbolChar(void *val, void *pel)
 {
 	struct SymbolTableEl *el = pel;
 	char c = *(char *)val;
 	return (el->c == c);
 }
 
-int cmpSymId(void *val, void *pel)
+static int cmpSymId(void *val, void *pel)
 {
 	struct SymbolTableEl *el = pel;
 	unsigned int id = *(unsigned int *)val;
 	return (el->id == id);
 }
 
-int cmpStateId(void *val, void *pState)
+static int cmpStateId(void *val, void *pState)
 {
 	struct State *s = pState;
 	int id = *(int *)val;
 	return (s->parserStateId == id);
+}
+
+static int cmpNode(void *val, void *pNode)
+{
+	struct Node *n = pNode;
+	struct SearchNode *s = val;
+	return (n->q == s->q && n->owner == s->owner &&
+			strcmp(s->word, n->word) == 0);
 }
 
 void createChars(const struct List *l, struct List **psymbolTable, char **pchars)
@@ -73,6 +116,8 @@ void createChars(const struct List *l, struct List **psymbolTable, char **pchars
 	struct ListIterator *it;
 	char *chars;
 	struct List *symbolTable;
+	const char *symLabels = 
+		"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 	*psymbolTable = list_new();
 	symbolTable = *psymbolTable;
@@ -123,25 +168,12 @@ int Node_nameSize(Node *n)
 char *Node_name(char *s, Node *n)
 {
 	if (n->word[0] == '\0')
-		sprintf(s, "%s, %s, %d)", n->q->name, "-", n->owner);
+		sprintf(s, "(%s, %s, %d)", n->q->name, "-", n->owner);
 	else
 		sprintf(s, "(%s, %s, %d)", n->q->name, n->word, n->owner);
 	return s;
 }
 
-int nodeNameSizeFromState(struct State *s, char *word, int owner)
-{
-	return 6 + strlen(s->name) + strlen(word) + 1 + 1 + (word[0] == '\0');
-}
-
-char *nodeNameFromState(char *name, struct State *s, char *word, int owner)
-{
-	if (word[0] == '\0')
-		sprintf(name, "(%s, %s, %d)", s->name, "-", owner);
-	else
-		sprintf(name, "(%s, %s, %d)", s->name, word, owner);
-	return name;
-}
 
 void setAccepting(Agnode_t *node)
 {
@@ -153,230 +185,230 @@ void setInitial(Agnode_t *node)
 	agset(node, "shape", "square");
 }
 
-void addNodesRec(Agraph_t *g, struct State *s, int maxSize, char *word)
+void addNodesRec(struct Graph *g, struct State *s, int maxSize, char *word)
 {
 	int size = strlen(word);
-	Node fake;
 	Node *n;
-	char *name = NULL;
 	char *pCont;
-	Agnode_t *gnode;
+	int i;
 
 
 	if (size >= maxSize)
 		return;
 
-	fake.q = s;
-	
-	pCont = contsChars;
-	fake.word = word;
+	pCont = g->contsChars;
 	while (*pCont != '\0')
 	{
 		word[size] = *pCont;
 		word[size+1] = '\0';
 
-		fake.owner = 0;
+		for (i = 0 ; i <= 1 ; i++)
+		{
+			n = malloc(sizeof *n);
 
-		if (name == NULL)
-			name = malloc(Node_nameSize(&fake));
-
-		Node_name(name, &fake);
-		gnode = agnode(g, name, TRUE);
-		if (s->isAccepting)
-			setAccepting(gnode);
-		n = (Node *)(agbindrec(gnode, "Node", sizeof *n, FALSE));
-		n->q = s;
-		n->word = strdup(fake.word);
-		n->owner = fake.owner;
-
-		fake.owner = 1;
-		Node_name(name, &fake);
-		gnode = agnode(g, name, TRUE);
-		if (s->isAccepting)
-			setAccepting(gnode);
-		n = (Node *)(agbindrec(gnode, "Node", sizeof *n, FALSE));
-		n->q = s;
-		n->word = strdup(fake.word);
-		n->owner = fake.owner;
+			if (n == NULL)
+			{
+				perror("malloc n");
+				exit(EXIT_FAILURE);
+			}
+			n->q = s;
+			n->owner = i;
+			n->word = strdup(word);
+			n->isAccepting = s->isAccepting;
+			n->isInitial = 0;
+			n->name = malloc(Node_nameSize(n));
+			if (n->name == NULL)
+			{
+				perror("malloc n->name");
+				exit(EXIT_FAILURE);
+			}
+			Node_name(n->name, n);
+			list_add(g->nodes, n);
+			list_add(g->nodesP[i], n);
+		}
 
 		addNodesRec(g, s, maxSize, word);
 
 		pCont++;
 	}
 
-	free(name);
+	word[size] = '\0';
 }
 
-void addNodes(Agraph_t *g, struct State *s, int maxSize)
+void addNodes(struct Graph *g, struct State *s, int maxSize)
 {
 	char *word = malloc(maxSize + 1);
-	char *name = malloc(6 + strlen(s->name) + 1 + 1 + 1);
-	Agnode_t *gnode;
 	Node *n;
-
-	sprintf(name, "(%s, -, %d)", s->name, 0);
-	gnode = agnode(g, name, TRUE);
-	if (s->isAccepting)
-		setAccepting(gnode);
-	n = (Node *)(agbindrec(gnode, "Node", sizeof *n, FALSE));
-	n->q = s;
-	n->word = "";
-	n->owner = 0;
-
-	sprintf(name, "(%s, -, %d)", s->name, 1);
-	gnode = agnode(g, name, TRUE);
-	if (s->isAccepting)
-		setAccepting(gnode);
-	if (s->isInitial)
-		setInitial(gnode);
-	n = (Node *)(agbindrec(gnode, "Node", sizeof *n, FALSE));
-	n->q = s;
-	n->word = "";
-	n->owner = 1;
+	int i;
 
 	word[0] = '\0';
-
-	free(name);
+	for (i = 0 ; i <= 1 ; i++)
+	{
+		n = malloc(sizeof *n);
+		if (n == NULL)
+		{
+			perror("malloc n");
+			exit(EXIT_FAILURE);
+		}
+		n->q = s;
+		n->owner = i;
+		n->isAccepting = s->isAccepting;
+		n->isInitial = (s->isInitial && n->owner == 1);
+		n->word = strdup(word);
+		n->name = malloc(Node_nameSize(n));
+		if (n->name == NULL)
+		{
+			perror("malloc n->name");
+			exit(EXIT_FAILURE);
+		}
+		Node_name(n->name, n);
+		list_add(g->nodes, n);
+		list_add(g->nodesP[i], n);
+	}
 
 	addNodesRec(g, s, maxSize, word);
 
 	free(word);
 }
 
-void addEdges(Agraph_t *g, int maxWordSize)
+void addEdges(struct Graph *g, int maxWordSize)
 {
-	Agnode_t *gn, *gdest;
-	Node *n;
-	Agedge_t *e;
+	Node *n, *dest;
+	struct SearchNode sn;
+	struct ListIterator *it;
 
-	for (gn = agfstnode(g) ; gn != NULL ; gn = agnxtnode(g, gn))
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
 	{
-		n = (Node *)(aggetrec(gn, "Node", FALSE));
-		/* Emit a controllable event */
-		if (n->owner == 0 && n->word[0] != '\0')
-		{
-			struct State *dest = n->q->contSuccs[(unsigned char)n->word[0]];
-			char *name;
-			name = malloc(nodeNameSizeFromState(dest, n->word + 1, 0));
-			if (name == NULL)
-			{
-				perror("malloc name");
-				exit(EXIT_FAILURE);
-			}
-			nodeNameFromState(name, dest, n->word + 1, 0);
-			gdest = agnode(g, name, FALSE);
-			if (gdest == NULL)
-			{
-				fprintf(stderr, "ERROR: cannot find node with name %s.\n", name);
-				exit(EXIT_FAILURE);
-			}
-			e = agedge(g, gn, gdest, "emit", TRUE);
-			agset(e, "color", "green");
-			free(name);
-		}
-		/* Stop emitting (1 plays after) */
+		n = listIterator_val(it);
 		if (n->owner == 0)
 		{
-			/* Same name but replacing 0 with 1 */
-			char *name = malloc(Node_nameSize(n));
-			if (name == NULL)
+			/* Emit a controllable event */
+			if (n->word[0] != '\0')
 			{
-				perror("malloc name");
+				sn.q = n->q->contSuccs[(unsigned char)n->word[0]];
+				sn.owner = 0;
+				sn.word = n->word + 1;
+				dest = list_search(g->nodes, &sn, cmpNode);
+				if (dest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find node (%s, %s, %d).\n", 
+							sn.q->name, sn.word, sn.owner);
+					exit(EXIT_FAILURE);
+				}
+				n->p0.succEmit = dest;
+			}
+			/* Stop emitting (let 1 play) */
+			sn.q = n->q;
+			sn.owner = 1;
+			sn.word = n->word;
+			dest = list_search(g->nodes, &sn, cmpNode);
+			if (dest == NULL)
+			{
+				fprintf(stderr, "ERROR: cannot find node (%p, %s, %d) (1).\n", 
+						sn.q, sn.word, sn.owner);
 				exit(EXIT_FAILURE);
 			}
-			nodeNameFromState(name, n->q, n->word, 1);
-			gdest = agnode(g, name, FALSE);
-			if (gdest == NULL)
-			{
-				fprintf(stderr, "ERROR: cannot find node with name %s.\n", name);
-				exit(EXIT_FAILURE);
-			}
-			e = agedge(g, gn, gdest, "stop", TRUE);
-			agset(e, "color", "lightblue");
-			free(name);
+			n->p0.succStopEmit = dest;
 		}
-		/* Add a controllable event */
-		if (n->owner == 1 && strlen(n->word) < maxWordSize)
+		else /* n->owner == 1 */
 		{
-			char *pcont = contsChars;
-			int size = strlen(n->word);
-			char *word = malloc(size + 2);
-			char *name;
-
-			if (word == NULL)
+			n->p1.succsCont = malloc(strlen(g->contsChars) * sizeof 
+					*(n->p1.succsCont));
+			if (n->p1.succsCont == NULL)
 			{
-				perror("malloc word");
+				perror("malloc n->p1.succsCont");
 				exit(EXIT_FAILURE);
 			}
-			strcpy(word, n->word);
-			word[size] = *pcont;
-			word[size+1] = '\0';
-			name = malloc(nodeNameSizeFromState(n->q, word, 0));
-			if (name == NULL)
+			n->p1.succsUncont = malloc(strlen(g->uncontsChars) * sizeof 
+					*(n->p1.succsUncont));
+			if (n->p1.succsUncont == NULL)
 			{
-				perror("malloc name");
+				perror("malloc n->p1.succsUncont");
 				exit(EXIT_FAILURE);
 			}
-			while (*pcont != '\0')
+			/* Add a controllable event */
+			if (strlen(n->word) < maxWordSize)
 			{
-				word[size] = *pcont;
-				word[size+1] = '\0';
-				nodeNameFromState(name, n->q, word, 0);
-				gdest = agnode(g, name, FALSE);
-				if (gdest == NULL)
-				{
-					fprintf(stderr, "ERROR: cannot find node with name %s.\n", 
-							name);
-					exit(EXIT_FAILURE);
-				}
-				e = agedge(g, gn, gdest, "cont", TRUE);
-				agset(e, "color", "orange");
-				pcont++;
-			}
-			free(name);
-			free(word);
-		}
-		/* Receive an uncontrollable event */
-		if (n->owner == 1)
-		{
-			char *puncont = uncontsChars;
-			char *name;
+				int i, nbConts = strlen(g->contsChars);
+				int size = strlen(n->word);
+				char *word = malloc(size + 2);
 
-			while (*puncont != '\0')
-			{
-				struct State *dest = n->q->uncontsSuccs[(unsigned char)*puncont];
-				name = malloc(nodeNameSizeFromState(dest, n->word, 0));
-				if (name == NULL)
+				strcpy(word, n->word);
+				word[size + 1] = '\0';
+
+				sn.q = n->q;
+				sn.word = word;
+				sn.owner = 0;
+
+				for (i = 0 ; i < nbConts ; i++)
 				{
-					perror("malloc name");
-					exit(EXIT_FAILURE);
+					word[size] = g->contsChars[i];
+					dest = list_search(g->nodes, &sn, cmpNode);
+					if (dest == NULL)
+					{
+						fprintf(stderr, "ERROR: cannot find node (%p, %s, " 
+								"%d) (2).\n", sn.q, sn.word, sn.owner);
+						exit(EXIT_FAILURE);
+					}
+					n->p1.succsCont[i] = dest;
 				}
-				nodeNameFromState(name, dest, n->word, 0);
-				gdest = agnode(g, name, FALSE);
-				if (gdest == NULL)
-				{
-					fprintf(stderr, "ERROR: cannot find node with name %s.\n", 
-							name);
-					exit(EXIT_FAILURE);
-				}
-				e = agedge(g, gn, gdest, "uncont", TRUE);
-				agset(e, "color", "red");
-				free(name);
-				puncont++;
+
+				free(word);
 			}
-		}
+			else
+			{
+				int nbConts = strlen(g->contsChars);
+				int i;
+				for (i = 0 ; i < nbConts ; i++)
+				{
+					n->p1.succsCont[i] = NULL;
+				}
+			}
+			/* Receive an uncontrollable event */
+			/* if nothing */
+			{
+				int i, nbUnconts = strlen(g->uncontsChars);
+
+				sn.word = n->word;
+				sn.owner = 0;
 				
+				for (i = 0 ; i < nbUnconts ; i++)
+				{
+					sn.q = n->q->uncontsSuccs[(unsigned char)g->uncontsChars[i]];
+
+					if (sn.q == NULL)
+					{
+						fprintf(stderr, "ALALALA\n");
+						exit(EXIT_FAILURE);
+					}
+					else 
+						fprintf(stderr, "%p\n", sn.q);
+					fflush(stderr);
+					dest = list_search(g->nodes, &sn, cmpNode);
+					if (dest == NULL)
+					{
+						fprintf(stderr, "ERROR: cannot find node (%p, %s, " 
+								"%d) (3).\n", sn.q, sn.word, sn.owner);
+						exit(EXIT_FAILURE);
+					}
+					n->p1.succsUncont[i] = dest;
+				}
+			}
+		}
 	}
+	listIterator_release(it);
 }
 
-void createStates(const struct List *pStates, const struct List *edges)
+void createStates(struct Graph *g, const struct List *states, const struct List 
+		*edges)
 {
 	struct ListIterator *it;
 	int i;
 
-	states = list_new();
+	g->states = list_new();
 
-	for (it = listIterator_first(pStates) ; listIterator_hasNext(it) ; it = 
+	for (it = listIterator_first(states) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
 	{
 		struct ParserState *ps = listIterator_val(it);
@@ -392,7 +424,7 @@ void createStates(const struct List *pStates, const struct List *edges)
 			s->uncontsSuccs[i] = NULL;
 		}
 
-		list_add(states, s);
+		list_add(g->states, s);
 	}
 	listIterator_release(it);
 
@@ -408,9 +440,9 @@ void createStates(const struct List *pStates, const struct List *edges)
 		struct SymbolTableEl *el;
 
 		id = parserState_getId(pfrom);
-		from = list_search(states, &id, cmpStateId);
+		from = list_search(g->states, &id, cmpStateId);
 		id = parserState_getId(pto);
-		to = list_search(states, &id, cmpStateId);
+		to = list_search(g->states, &id, cmpStateId);
 
 		if (from == NULL)
 		{
@@ -428,29 +460,31 @@ void createStates(const struct List *pStates, const struct List *edges)
 		id = parserSymbol_getId(psym);
 		if (parserSymbol_isCont(psym))
 		{
-			el = list_search(contsTable, &id, cmpSymId);
+			el = list_search(g->contsTable, &id, cmpSymId);
 			if (el == NULL)
 			{
 				fprintf(stderr, "ERROR: cannot find symbol of id %d.\n", id);
 				exit(EXIT_FAILURE);
 			}
 			from->contSuccs[(unsigned char)el->c] = to;
+			fprintf(stderr, "Adding edge %s ->{%c} %s\n", from->name, el->c, to->name);
 		}
 		else
 		{
-			el = list_search(uncontsTable, &id, cmpSymId);
+			el = list_search(g->uncontsTable, &id, cmpSymId);
 			if (el == NULL)
 			{
 				fprintf(stderr, "ERROR: cannot find symbol of id %d.\n", id);
 				exit(EXIT_FAILURE);
 			}
 			from->uncontsSuccs[(unsigned char)el->c] = to;
+			fprintf(stderr, "Adding edge %s ->{%c} %s\n", from->name, el->c, to->name);
 		}
 	}
 	listIterator_release(it);
 }
 
-void createGraphFromAutomaton(Agraph_t *g, const char *filename, int maxWordSize)
+void createGraphFromAutomaton(struct Graph *g, const char *filename, int maxWordSize)
 {
 	const struct List *pstates = NULL;
 	const struct List *pconts = NULL;
@@ -466,11 +500,14 @@ void createGraphFromAutomaton(Agraph_t *g, const char *filename, int maxWordSize
 	punconts = parser_getUnconts();
 	pedges = parser_getEdges();
 
-	createChars(pconts, &contsTable, &contsChars);
-	createChars(punconts, &uncontsTable, &uncontsChars);
-	createStates(pstates, pedges);
+	g->nodes = list_new();
+	g->nodesP[0] = list_new();
+	g->nodesP[1] = list_new();
+	createChars(pconts, &(g->contsTable), &(g->contsChars));
+	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars));
+	createStates(g, pstates, pedges);
 
-	for (it = listIterator_first(states) ; listIterator_hasNext(it) ; it = 
+	for (it = listIterator_first(g->states) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
 	{
 		struct State *s = listIterator_val(it);
@@ -481,11 +518,118 @@ void createGraphFromAutomaton(Agraph_t *g, const char *filename, int maxWordSize
 	addEdges(g, maxWordSize);
 }
 
+void drawGraph(struct Graph *g)
+{
+	Agraph_t *gviz;
+	GVC_t *gvc;
+	Agnode_t *gnode, *gdest;
+	Agedge_t *gedge;
+	struct ListIterator *it;
+	Node *n;
+	struct VizNode *nviz;
+	int i;
+
+	gviz = agopen("G", Agdirected, NULL);
+	agattr(gviz, AGNODE, "color", "black");
+	agattr(gviz, AGNODE, "shape", "ellipse");
+	agattr(gviz, AGEDGE, "color", "black");
+
+	for (it = listIterator_first(g->nodes) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		n = listIterator_val(it);
+		gnode = agnode(gviz, n->name, TRUE);
+		if (n->isAccepting)
+			agset(gnode, "color", "blue");
+		if (n->isInitial)
+			agset(gnode, "shape", "square");
+		nviz = agbindrec(gnode, "Node", sizeof *nviz, FALSE);
+		nviz->n = n;
+	}
+	listIterator_release(it);
+
+	for (gnode = agfstnode(gviz) ; gnode != NULL ; gnode = agnxtnode(gviz, gnode))
+	{
+		nviz = (struct VizNode *)aggetrec(gnode, "Node", FALSE);
+		if (nviz == NULL)
+		{
+			fprintf(stderr, "ERROR: no node associated to graphviz node %s\n", 
+					agnameof(gnode));
+			exit(EXIT_FAILURE);
+		}
+		n = nviz->n;
+		if (n->owner == 0)
+		{
+			if (n->word[0] != '\0')
+			{
+				gdest = agnode(gviz, n->p0.succEmit->name, FALSE);
+				if (gdest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+							n->p0.succEmit->name);
+					exit(EXIT_FAILURE);
+				}
+				gedge = agedge(gviz, gnode, gdest, "emit", TRUE);
+				agset(gedge, "color", "green");
+			}
+
+			gdest = agnode(gviz, n->p0.succStopEmit->name, FALSE);
+			if (gdest == NULL)
+			{
+				fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+						n->p0.succStopEmit->name);
+				exit(EXIT_FAILURE);
+			}
+			gedge = agedge(gviz, gnode, gdest, "stopEmit", TRUE);
+			agset(gedge, "color", "blue");
+		}
+		else /* n->owner == 1 */
+		{
+			int nbChars = strlen(g->contsChars);
+			for (i = 0 ; i < nbChars ; i++)
+			{
+				if (n->p1.succsCont[i] != NULL) /* Max buffer size */
+				{
+					gdest = agnode(gviz, n->p1.succsCont[i]->name, FALSE);
+					if (gdest == NULL)
+					{
+						fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+								n->p1.succsCont[i]->name);
+						exit(EXIT_FAILURE);
+					}
+					gedge = agedge(gviz, gnode, gdest, "cont", TRUE);
+					agset(gedge, "color", "orange");
+				}
+			}
+
+			nbChars = strlen(g->uncontsChars);
+			for (i = 0 ; i < nbChars ; i++)
+			{
+				gdest = agnode(gviz, n->p1.succsUncont[i]->name, FALSE);
+				if (gdest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+							n->p1.succsUncont[i]->name);
+					exit(EXIT_FAILURE);
+				}
+				gedge = agedge(gviz, gnode, gdest, "uncont", TRUE);
+				agset(gedge, "color", "red");
+			}
+		}
+	}
+
+	gvc = gvContext();
+	gvLayout(gvc, gviz, "dot");
+	gvRender(gvc, gviz, "png", stdout);
+	gvFreeLayout(gvc, gviz);
+
+	gvFreeContext(gvc);
+	agclose(gviz);
+}
 
 int main(int argc, char *argv[])
 {
-	Agraph_t *g;
-	GVC_t *gvc;
+	struct Graph g;
 	char *filename;
 	int maxBufferSize;
 
@@ -501,21 +645,9 @@ int main(int argc, char *argv[])
 	filename = argv[1];
 	maxBufferSize = atoi(argv[2]);
 
-	g = agopen("G", Agdirected, NULL);
-	agattr(g, AGNODE, "color", "black");
-	agattr(g, AGNODE, "shape", "ellipse");
-	agattr(g, AGEDGE, "color", "black");
-
-	createGraphFromAutomaton(g, filename, maxBufferSize);
+	createGraphFromAutomaton(&g, filename, maxBufferSize);
+	drawGraph(&g);
 	
-	gvc = gvContext();
-	gvLayout(gvc, g, "dot");
-	gvRender(gvc, g, "png", stdout);
-	gvFreeLayout(gvc, g);
-
-	agclose(g);
-	gvFreeContext(gvc);
-
 	return EXIT_SUCCESS;
 }
 
