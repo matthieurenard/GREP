@@ -508,11 +508,11 @@ static struct Node *node_new(const struct Graph *g, const struct Zone *z, const
 			dbmw_containsZero(z->dbm));
 	n->isWinning = 0;
 	n->isLeaf = 0;
-	n->realWord = node_computeRealWord(n);
 	n->edges = list_new();
 	n->index = nextIndex++;
 	n->userData = NULL;
 	n->g = g;
+	n->realWord = node_computeRealWord(n);
 	if (n->owner == 0)
 	{
 		n->p0.strat = STRAT_DONTEMIT;
