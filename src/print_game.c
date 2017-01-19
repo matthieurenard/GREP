@@ -24,6 +24,9 @@ struct State
 	int isAccepting;
 	struct State *contSuccs[NBSUCCS];
 	struct State *uncontsSuccs[NBSUCCS];
+	int isLastCreated;
+	int nbPredsUncont;
+	int nbPredsCont;
 };
 
 typedef struct Node
@@ -37,11 +40,18 @@ typedef struct Node
 		{
 			struct Node *succEmit;
 			struct Node *succStopEmit;
+			struct Node **predsEmit;
+			struct Node **predsUncont;
+			struct Node *predContRcvd;
+			int nbPredsUncont;
+			int nbPredsEmit;
 		} p0;
 		struct
 		{
 			struct Node **succsCont;
 			struct Node **succsUncont;
+			struct Node *predStop;
+			int nbSuccsCont;
 		} p1;
 	};
 	char *name;
@@ -79,6 +89,7 @@ struct Graph
 	struct List *states;
 	struct List *nodes;
 	struct List *nodesP[2];
+	struct List *lastCreated;
 };
 
 
@@ -272,42 +283,247 @@ void addNodesRec(struct Graph *g, struct State *s, int maxSize, char *word)
 	word[size] = '\0';
 }
 
-void addNodes(struct Graph *g, struct State *s, int maxSize)
+void addEdgesToLast(struct Graph *g)
+{
+	struct ListIterator *it;
+	struct SearchNode sn;
+	struct Node *dest;
+	int i;
+
+	/* Add internal edges (i.e. edges between two nodes in lastCreated) */
+	for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
+			= listIterator_next(it))
+	{
+		struct Node *n = listIterator_val(it);
+		if (n->owner == 0)
+		{
+			/* (q, w, 0) --> (q, w, 1) */
+			sn.q = n->q;
+			sn.word = n->word;
+			sn.owner = 1;
+			dest = list_search(g->lastCreated, &sn, cmpNode);
+			if (dest == NULL)
+			{
+				fprintf(stderr, "ERROR: cannot find node (%s, %s, 1) in "
+						"lastCreated.\n", n->q->name, n->word);
+				exit(EXIT_FAILURE);
+			}
+			n->p0.succStopEmit = dest;
+			dest->p1.predStop = n;
+
+			if (n->word[0] != '\0')
+			{
+				char c;
+
+				/* (q, c . w, 0) --> (q after c, w, 0) */
+				sn.q = n->q->contSuccs[(unsigned char)n->word[0]];
+				sn.word = n->word + 1; /* Remove first event */
+				sn.owner = 0;
+				dest = list_search(g->nodes, &sn, cmpNode);
+				if (dest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find node (%s, %s, 0) in "
+							"nodes.\n", n->q->name, n->word + 1);
+					exit(EXIT_FAILURE);
+				}
+				n->p0.succEmit = dest;
+				dest->p0.predsEmit[dest->p0.nbPredsEmit++] = n;
+
+				/* (q, w.c, 0) <-- (q, w, 1) */
+				sn.q = n->q;
+				sn.word = n->word;
+				c = n->word[strlen(n->word) - 1];
+				n->word[strlen(n->word) - 1] = '\0';
+				sn.owner = 1;
+				dest = list_search(g->nodes, &sn, cmpNode);
+				if (dest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find node (%s, %s, 1) in "
+							"nodes.\n", sn.q->name, n->word);
+					exit(EXIT_FAILURE);
+				}
+				n->word[strlen(n->word)] = c;
+				/* !! dest <--> n !! */
+				dest->p1.succsCont[dest->p1.nbSuccsCont++] = n;
+				n->p0.predContRcvd = dest;
+			}
+		}
+		else
+		{
+			int size = strlen(g->uncontsChars);
+			char c;
+			/* (q, w, 1) --> (q after u, w, 0) */
+			for (i = 0 ; i < size ; i++)
+			{
+				sn.q = n->q->uncontsSuccs[(unsigned char)g->uncontsChars[i]];
+				sn.word = n->word;
+				sn.owner = 0;
+				dest = list_search(g->lastCreated, &sn, cmpNode);
+				if (dest == NULL)
+				{
+					fprintf(stderr, "ERROR: cannot find node (%s, %s, 1) in "
+							"lastCreated.\n", n->q->name, n->word);
+					exit(EXIT_FAILURE);
+				}
+				n->p1.succsUncont[i] = dest;
+				dest->p0.predsUncont[dest->p0.nbPredsUncont++] = n;
+			}
+		}
+	}
+
+	listIterator_release(it);
+}
+
+void Node_allocSuccPreds(struct Node *n, struct Graph *g)
+{
+	int i;
+
+	if (n->owner == 0)
+	{
+		n->p0.nbPredsUncont = 0;
+		n->p0.nbPredsEmit = 0;
+		n->p0.succEmit = NULL;
+		n->p0.succStopEmit = NULL;
+		n->p0.predContRcvd = NULL;
+		n->p0.predsEmit = malloc(n->q->nbPredsCont * sizeof *(n->p0.predsEmit));
+		if (n->p0.predsEmit == NULL)
+		{
+			perror("malloc n->p0.predsEmit");
+			exit(EXIT_FAILURE);
+		}
+		n->p0.predsUncont = malloc(n->q->nbPredsUncont * sizeof *(n->p0.predsUncont));
+		if (n->p0.predsUncont == NULL)
+		{
+			perror("malloc n->p0.predsUncont");
+			exit(EXIT_FAILURE);
+		}
+	}
+	else
+	{
+		int size = strlen(g->contsChars);
+
+		n->p1.nbSuccsCont = 0;
+		n->p1.predStop = NULL;
+		n->p1.succsCont = malloc(size * sizeof *(n->p1.succsCont));
+		if (n->p1.succsCont == NULL)
+		{
+			perror("malloc n->p1.succsCont");
+			exit(EXIT_FAILURE);
+		}
+		for (i = 0 ; i < size ; i++)
+		{
+			n->p1.succsCont[i] = NULL;
+		}
+
+		n->p1.succsUncont = malloc(strlen(g->uncontsChars) * sizeof 
+				*(n->p1.succsUncont));
+		if (n->p1.succsUncont == NULL)
+		{
+			perror("malloc n->p1.succsUncont");
+			exit(EXIT_FAILURE);
+		}
+	}
+
+}
+
+void addNodes(struct Graph *g, int maxSize)
 {
 	char *word = malloc(maxSize + 1);
 	Node *n;
 	int i;
+	struct ListIterator *it;
+	struct List *newNodes = list_new(), *tmpList;
 
-	word[0] = '\0';
-	for (i = 0 ; i <= 1 ; i++)
+	for (it = listIterator_first(g->states) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
 	{
-		n = malloc(sizeof *n);
-		if (n == NULL)
+		struct State *s = listIterator_val(it);
+		
+		word[0] = '\0';
+		for (i = 0 ; i <= 1 ; i++)
 		{
-			perror("malloc n");
-			exit(EXIT_FAILURE);
+			n = malloc(sizeof *n);
+			if (n == NULL)
+			{
+				perror("malloc n");
+				exit(EXIT_FAILURE);
+			}
+			n->q = s;
+			n->owner = i;
+			n->isAccepting = s->isAccepting;
+			n->isInitial = (s->isInitial && n->owner == 1);
+			n->word = strdup(word);
+			n->name = malloc(Node_nameSize(n));
+			if (n->name == NULL)
+			{
+				perror("malloc n->name");
+				exit(EXIT_FAILURE);
+			}
+			Node_name(n->name, n);
+			n->isWinning = 0;
+			Node_allocSuccPreds(n, g);
+			list_add(g->nodes, n);
+			list_add(g->nodesP[i], n);
+			list_add(g->lastCreated, n);
 		}
-		n->q = s;
-		n->owner = i;
-		n->isAccepting = s->isAccepting;
-		n->isInitial = (s->isInitial && n->owner == 1);
-		n->word = strdup(word);
-		n->name = malloc(Node_nameSize(n));
-		if (n->name == NULL)
-		{
-			perror("malloc n->name");
-			exit(EXIT_FAILURE);
-		}
-		Node_name(n->name, n);
-		n->isWinning = 0;
-		list_add(g->nodes, n);
-		list_add(g->nodesP[i], n);
 	}
+	listIterator_release(it);
+	addEdgesToLast(g);
 
-	addNodesRec(g, s, maxSize, word);
+	for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
+			= listIterator_next(it))
+	{
+		struct Node *src = listIterator_val(it);
+		int wordSize = strlen(src->word) + 1;
+		int i, nSuccs = strlen(g->contsChars);
+		
+		for (i = 0 ; i < nSuccs ; i++)
+		{
+			n = malloc(sizeof *n);
+			if (n == NULL)
+			{
+				perror("malloc n");
+				exit(EXIT_FAILURE);
+			}
+			n->q = src->q;
+			n->word = malloc(wordSize + 1);
+			if (n->word == NULL)
+			{
+				perror("malloc n->word");
+				exit(EXIT_FAILURE);
+			}
+			strcpy(n->word, src->word);
+			n->word[wordSize-1] = g->contsChars[i];
+			n->word[wordSize] = '\0';
+			n->owner = src->owner;
+			n->name = malloc(Node_nameSize(n));
+			if (n->name == NULL)
+			{
+				perror("malloc n->name");
+				exit(EXIT_FAILURE);
+			}
+			Node_name(n->name, n);
+			n->isAccepting = n->q->isAccepting;
+			n->isInitial = 0;
+			n->isWinning = 0;
+			Node_allocSuccPreds(n, g);
+			list_add(g->nodes, n);
+			list_add(g->nodesP[n->owner], n);
+			list_add(newNodes, n);
+		}
+	}
+	listIterator_release(it);
+
+	list_cleanup(g->lastCreated, NULL);
+	tmpList = g->lastCreated;
+	g->lastCreated = newNodes;
+	newNodes = tmpList;
+
+	addEdgesToLast(g);
 
 	free(word);
 }
+
 
 void addEdges(struct Graph *g, int maxWordSize)
 {
@@ -447,6 +663,8 @@ void createStates(struct Graph *g, const struct List *states, const struct List
 		s->name = strdup(parserState_getName(ps));
 		s->isInitial = parserState_isInitial(ps);
 		s->isAccepting = parserState_isAccepting(ps);
+		s->nbPredsCont = 0;
+		s->nbPredsUncont = 0;
 
 		for (i = 0 ; i < NBSUCCS ; i++)
 		{
@@ -497,6 +715,7 @@ void createStates(struct Graph *g, const struct List *states, const struct List
 				exit(EXIT_FAILURE);
 			}
 			from->contSuccs[(unsigned char)el->c] = to;
+			to->nbPredsCont++;
 		}
 		else
 		{
@@ -507,6 +726,7 @@ void createStates(struct Graph *g, const struct List *states, const struct List
 				exit(EXIT_FAILURE);
 			}
 			from->uncontsSuccs[(unsigned char)el->c] = to;
+			to->nbPredsUncont++;
 		}
 	}
 	listIterator_release(it);
@@ -531,19 +751,12 @@ void createGraphFromAutomaton(struct Graph *g, const char *filename, int maxWord
 	g->nodes = list_new();
 	g->nodesP[0] = list_new();
 	g->nodesP[1] = list_new();
+	g->lastCreated = list_new();
 	createChars(pconts, &(g->contsTable), &(g->contsChars));
 	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars));
 	createStates(g, pstates, pedges);
 
-	for (it = listIterator_first(g->states) ; listIterator_hasNext(it) ; it = 
-			listIterator_next(it))
-	{
-		struct State *s = listIterator_val(it);
-		addNodes(g, s, maxWordSize);
-	}
-	listIterator_release(it);
-
-	addEdges(g, maxWordSize);
+	addNodes(g, maxWordSize);
 }
 
 void attr(struct Set *ret, struct Graph *g, int player, const struct Set *U, 
@@ -771,7 +984,7 @@ void drawGraph(struct Graph *g)
 				gdest = agnode(gviz, n->p0.succEmit->name, FALSE);
 				if (gdest == NULL)
 				{
-					fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+					fprintf(stderr, "ERROR: cannot find gnode %s (1).\n", 
 							n->p0.succEmit->name);
 					exit(EXIT_FAILURE);
 				}
@@ -782,7 +995,7 @@ void drawGraph(struct Graph *g)
 			gdest = agnode(gviz, n->p0.succStopEmit->name, FALSE);
 			if (gdest == NULL)
 			{
-				fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+				fprintf(stderr, "ERROR: cannot find gnode %s (2).\n", 
 						n->p0.succStopEmit->name);
 				exit(EXIT_FAILURE);
 			}
@@ -799,7 +1012,7 @@ void drawGraph(struct Graph *g)
 					gdest = agnode(gviz, n->p1.succsCont[i]->name, FALSE);
 					if (gdest == NULL)
 					{
-						fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+						fprintf(stderr, "ERROR: cannot find gnode %s (3).\n", 
 								n->p1.succsCont[i]->name);
 						exit(EXIT_FAILURE);
 					}
@@ -814,7 +1027,7 @@ void drawGraph(struct Graph *g)
 				gdest = agnode(gviz, n->p1.succsUncont[i]->name, FALSE);
 				if (gdest == NULL)
 				{
-					fprintf(stderr, "ERROR: cannot find gnode %s.\n", 
+					fprintf(stderr, "ERROR: cannot find gnode %s (4).\n", 
 							n->p1.succsUncont[i]->name);
 					exit(EXIT_FAILURE);
 				}
