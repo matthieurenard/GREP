@@ -430,7 +430,7 @@ void addNodes(struct Graph *g, int maxSize)
 {
 	char *word = malloc(maxSize + 1);
 	Node *n;
-	int i;
+	int i, wordSize = 0;
 	struct ListIterator *it;
 	struct List *newNodes = list_new(), *tmpList;
 
@@ -470,56 +470,60 @@ void addNodes(struct Graph *g, int maxSize)
 	listIterator_release(it);
 	addEdgesToLast(g);
 
-	for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
-			= listIterator_next(it))
+	wordSize = 1;
+	while (wordSize <= maxSize)
 	{
-		struct Node *src = listIterator_val(it);
-		int wordSize = strlen(src->word) + 1;
-		int i, nSuccs = strlen(g->contsChars);
-		
-		for (i = 0 ; i < nSuccs ; i++)
+		for (it = listIterator_first(g->lastCreated) ; listIterator_hasNext(it) ; it 
+				= listIterator_next(it))
 		{
-			n = malloc(sizeof *n);
-			if (n == NULL)
+			struct Node *src = listIterator_val(it);
+			int i, nSuccs = strlen(g->contsChars);
+			
+			for (i = 0 ; i < nSuccs ; i++)
 			{
-				perror("malloc n");
-				exit(EXIT_FAILURE);
+				n = malloc(sizeof *n);
+				if (n == NULL)
+				{
+					perror("malloc n");
+					exit(EXIT_FAILURE);
+				}
+				n->q = src->q;
+				n->word = malloc(wordSize + 1);
+				if (n->word == NULL)
+				{
+					perror("malloc n->word");
+					exit(EXIT_FAILURE);
+				}
+				strcpy(n->word, src->word);
+				n->word[wordSize-1] = g->contsChars[i];
+				n->word[wordSize] = '\0';
+				n->owner = src->owner;
+				n->name = malloc(Node_nameSize(n));
+				if (n->name == NULL)
+				{
+					perror("malloc n->name");
+					exit(EXIT_FAILURE);
+				}
+				Node_name(n->name, n);
+				n->isAccepting = n->q->isAccepting;
+				n->isInitial = 0;
+				n->isWinning = 0;
+				Node_allocSuccPreds(n, g);
+				list_add(g->nodes, n);
+				list_add(g->nodesP[n->owner], n);
+				list_add(newNodes, n);
 			}
-			n->q = src->q;
-			n->word = malloc(wordSize + 1);
-			if (n->word == NULL)
-			{
-				perror("malloc n->word");
-				exit(EXIT_FAILURE);
-			}
-			strcpy(n->word, src->word);
-			n->word[wordSize-1] = g->contsChars[i];
-			n->word[wordSize] = '\0';
-			n->owner = src->owner;
-			n->name = malloc(Node_nameSize(n));
-			if (n->name == NULL)
-			{
-				perror("malloc n->name");
-				exit(EXIT_FAILURE);
-			}
-			Node_name(n->name, n);
-			n->isAccepting = n->q->isAccepting;
-			n->isInitial = 0;
-			n->isWinning = 0;
-			Node_allocSuccPreds(n, g);
-			list_add(g->nodes, n);
-			list_add(g->nodesP[n->owner], n);
-			list_add(newNodes, n);
 		}
+		listIterator_release(it);
+
+		list_cleanup(g->lastCreated, NULL);
+		tmpList = g->lastCreated;
+		g->lastCreated = newNodes;
+		newNodes = tmpList;
+
+		addEdgesToLast(g);
+		wordSize++;
 	}
-	listIterator_release(it);
-
-	list_cleanup(g->lastCreated, NULL);
-	tmpList = g->lastCreated;
-	g->lastCreated = newNodes;
-	newNodes = tmpList;
-
-	addEdgesToLast(g);
 
 	free(word);
 }
