@@ -26,7 +26,7 @@ struct State
 	int isInitial;
 	int isAccepting;
 	struct List *contSuccs[NBSUCCS];
-	struct List *uncontsSuccs[NBSUCCS];
+	struct List *uncontSuccs[NBSUCCS];
 	int isLastCreated;
 	unsigned int index;
 };
@@ -44,8 +44,8 @@ struct TimedAutomaton
 	unsigned int nbStates;
 	struct Clock **clocks;
 	unsigned int nbClocks;
-	struct List *contsTable;
-	struct List *uncontsTable;
+	const struct List *contsTable;
+	const struct List *uncontsTable;
 };
 
 struct Zone
@@ -84,6 +84,7 @@ typedef struct Node
 	const struct State *q;
 	const struct StringArray *sa;
 	struct Dbmw *dbm;
+	struct Graph *g;
 	char *realWord;
 	int owner;
 	int meta;
@@ -187,7 +188,7 @@ static void removeSetFromList(struct List *l, const struct Set *s);
 static void symbolTableEl_free(struct SymbolTableEl *el);
 static char *computeRealWord(const struct Graph *g, const char *word);
 static struct Node *node_new(const struct Graph *g, const struct State *q, const 
-		struct StringArray *sa, int owner);
+		struct Dbmw *, const struct StringArray *sa, int owner);
 #if 0
 static struct Node *node_nextCont(const struct Graph *g, const struct Node 
 		*prev, char cont);
@@ -215,6 +216,10 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *, const stru
 static void stateEdge_free(struct StateEdge *);
 static struct Edge *edge_new(enum EdgeType type, struct Node *n);
 static void edge_free(struct Edge *e);
+static struct Zone *zone_new(const struct State *, const struct Dbmw *);
+static struct Zone *zone_newcp(const struct Zone *);
+static int zone_areEqual(const struct Zone *, const struct Zone *);
+static void zone_free(struct Zone *);
 static void createChars(const struct List *l, struct List **psymbolTable, char 
 		**pchars);
 static unsigned int contIndex(const struct Graph *g, char c);
@@ -229,7 +234,7 @@ static void computeW0(struct Graph *g, struct Set *ret);
 static void addNodes(struct Graph *g, struct Tree *);
 static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable, 
 		const struct List *uncontsTable, const struct List *states, const struct 
-		List *edges);
+		List *clocks, const struct List *edges);
 static struct ArrayTwo *arraytwo_new(unsigned int size, int defaultVal);
 static struct ArrayTwo *arraytwo_newcp(const struct ArrayTwo *);
 static void arraytwo_cp(struct ArrayTwo *, const struct ArrayTwo *);
@@ -387,7 +392,7 @@ static char *computeRealWord(const struct Graph *g, const char *word)
 }
 
 static struct Node *node_new(const struct Graph *g, const struct State *q, const 
-		struct StringArray *sa, int owner)
+		struct Dbmw *dbm, const struct StringArray *sa, int owner)
 {
 	int i;
 	struct Node *n = malloc(sizeof *n);
@@ -401,6 +406,7 @@ static struct Node *node_new(const struct Graph *g, const struct State *q, const
 	n->q = q;
 	n->sa = sa;
 	n->owner = owner;
+	n->dbm = dbmw_newcp(dbm);
 	n->isAccepting = q->isAccepting;
 	n->isInitial = (q->isInitial && sa->s[0] == '\0' && owner == 0);
 	n->isWinning = 0;
@@ -481,6 +487,11 @@ const char *node_word(const struct Node *n)
 int node_owner(const struct Node *n)
 {
 	return n->owner;
+}
+
+const char *node_getConstraints(const struct Node *n)
+{
+	return dbmw_sprint(n->dbm, n->g->a->clocks);
 }
 
 int node_isAccepting(const struct Node *n)
@@ -637,7 +648,7 @@ static const struct State *state_nextUncont(const struct State *s, char c, const
 		struct Dbmw *guards)
 {
 	struct ListIterator *it;
-	struct List *edges = s->uncontsSuccs[(unsigned char)c];
+	struct List *edges = s->uncontSuccs[(unsigned char)c];
 
 	for (it = listIterator_first(edges) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
@@ -671,7 +682,7 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 
 	ret->resets = list_new();
 	ret->to = s;
-	ret->dbm = dbmw_new(a->nbClocks);
+	ret->dbm = dbmw_new(a->nbClocks + 1);
 
 	for (it = listIterator_first(constraints) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
@@ -717,6 +728,8 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const str
 		}
 	}
 	listIterator_release(it);
+
+	return ret;
 }
 
 static void stateEdge_free(struct StateEdge *e)
@@ -744,6 +757,42 @@ static struct Edge *edge_new(enum EdgeType type, struct Node *n)
 static void edge_free(struct Edge *e)
 {
 	free(e);
+}
+
+static struct Zone *zone_new(const struct State *s, const struct Dbmw *dbm)
+{
+	struct Zone *ret = malloc(sizeof *ret);
+
+	if (ret == NULL)
+	{
+		perror("malloc zone_new:ret");
+		exit(EXIT_FAILURE);
+	}
+
+	ret->dbm = dbmw_newcp(dbm);
+	ret->s = s;
+
+	ret->timeSucc = NULL;
+	ret->contSuccs = NULL;
+	ret->uncontSuccs = NULL;
+
+	return ret;
+}
+
+static struct Zone *zone_newcp(const struct Zone *z)
+{
+	return zone_new(z->s, z->dbm);
+}
+
+static int zone_areEqual(const struct Zone *z1, const struct Zone *z2)
+{
+	return (z1->s == z2->s && dbmw_areEqual(z1->dbm, z2->dbm));
+}
+
+static void zone_free(struct Zone *z)
+{
+	dbmw_free(z->dbm);
+	free(z);
 }
 	
 static void createChars(const struct List *l, struct List **psymbolTable, char **pchars)
@@ -1148,7 +1197,7 @@ static void computeW0(struct Graph *g, struct Set *ret)
 	set_free(Sset);
 }
 
-
+#if 0
 static void addNodesRec(struct Graph *g, const struct State *s, struct Tree 
 		*stringArrays, struct Node *pred)
 {
@@ -1190,6 +1239,7 @@ static void addNodes(struct Graph *g, struct Tree *stringArrays)
 		addNodesRec(g, &(g->a->states[i]), stringArrays, NULL);
 	}
 }
+#endif
 
 static void addEmitEdges(struct Graph *g)
 {
@@ -1210,7 +1260,7 @@ static void addEmitEdges(struct Graph *g)
 		if (n->sa->s[0] == '\0')
 			continue;
 
-		next = g->baseNodes[state_nextCont(n->q, n->sa->s[0])->index];
+		next = g->baseNodes[state_nextCont(n->q, n->sa->s[0], n->dbm)->index];
 		remain = n->sa->s + 1;
 
 		while (*remain != '\0')
@@ -1241,7 +1291,7 @@ static void addUncontEdges(struct Graph *g)
 
 		for (i = 0 ;  i < g->nbUnconts ; i++)
 		{
-			next = g->baseNodes[state_nextUncont(n->q, g->uncontsChars[i])->index];
+			next = g->baseNodes[state_nextUncont(n->q, g->uncontsChars[i], n->dbm)->index];
 
 			/* Do not loop */
 			if (next == n)
@@ -1283,7 +1333,7 @@ static void addEmitAllEdges(struct Graph *g)
 
 static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable, 
 		const struct List *uncontsTable, const struct List *states, const struct 
-		List *edges)
+		List *clocks, const struct List *edges)
 {
 	struct ListIterator *it;
 	int i, j;
@@ -1299,9 +1349,9 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 	a->uncontsTable = uncontsTable;
 	a->nbStates = list_size(states);
 	a->states = malloc(a->nbStates * sizeof *(a->states));
-	if (g->states == NULL)
+	if (a->states == NULL)
 	{
-		perror("malloc g->states");
+		perror("malloc a->states");
 		exit(EXIT_FAILURE);
 	}
 
@@ -1319,8 +1369,25 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 		for (j = 0 ; j < NBSUCCS ; j++)
 		{
 			s->contSuccs[j] = NULL;
-			s->uncontsSuccs[j] = NULL;
+			s->uncontSuccs[j] = NULL;
 		}
+	}
+	listIterator_release(it);
+
+	a->nbClocks = list_size(clocks);
+	a->clocks = malloc(a->nbClocks * sizeof *(a->clocks));
+	if (a->clocks == NULL)
+	{
+		perror("malloc timedAutomaton_new:a->clocks");
+		exit(EXIT_FAILURE);
+	}
+
+	for (it = listIterator_first(clocks), i = 0 ; listIterator_hasNext(it) ; it 
+			= listIterator_next(it), i++)
+	{
+		struct ParserClock *pclock = listIterator_val(it);
+		a->clocks[i] = clock_new(parserClock_getId(pclock), i + 1, 
+				parserClock_getName(pclock));
 	}
 	listIterator_release(it);
 
@@ -1344,7 +1411,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 		}
 		id = parserState_getId(pto);
 		to = NULL;
-		for (i = 0 ; i < g->nbStates ; i++)
+		for (i = 0 ; i < a->nbStates ; i++)
 		{
 			if (a->states[i].parserStateId == id)
 				to = &(a->states[i]);
@@ -1374,8 +1441,8 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 				fprintf(stderr, "ERROR: cannot find symbol of id %d.\n", id);
 				exit(EXIT_FAILURE);
 			}
-			if (from->contSuccs == NULL)
-				from->contSuccs = list_new();
+			if (from->contSuccs[(unsigned char)el->c] == NULL)
+				from->contSuccs[(unsigned char)el->c] = list_new();
 			se = stateEdge_new(a, to, parserEdge_getConstraints(pe), 
 					parserEdge_getResets(pe));
 			list_add(from->contSuccs[(unsigned char)el->c], se);
@@ -1390,16 +1457,54 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 				fprintf(stderr, "ERROR: cannot find symbol of id %d.\n", id);
 				exit(EXIT_FAILURE);
 			}
-			if (from->uncontsSuccs == NULL)
-				from->uncontSuccs = list_new();
+			if (from->uncontSuccs[(unsigned char)el->c] == NULL)
+				from->uncontSuccs[(unsigned char)el->c] = list_new();
 			se = stateEdge_new(a, to, parserEdge_getConstraints(pe), 
 					parserEdge_getResets(pe));
-			from->uncontsSuccs[(unsigned char)el->c] = to;
+			list_add(from->uncontSuccs[(unsigned char)el->c], se);
 		}
 	}
 	listIterator_release(it);
 
 	return a;
+}
+
+void timedAutomaton_free(struct TimedAutomaton *a)
+{
+	int i, j;
+	for (i = 0 ; i < a->nbStates ; i++)
+	{
+		for (j = 0 ; j < 256 ; j++)
+		{
+			struct ListIterator *it;
+			if (a->states[i].contSuccs[j] != NULL)
+			{
+				for (it = listIterator_first(a->states[i].contSuccs[j]) ; 
+						listIterator_hasNext(it) ; it = listIterator_next(it))
+				{
+					struct StateEdge *se = listIterator_val(it);
+					stateEdge_free(se);
+				}
+				listIterator_release(it);
+			}
+			if (a->states[i].uncontSuccs[j] != NULL)
+			{
+				for (it = listIterator_first(a->states[i].uncontSuccs[j]) ; 
+						listIterator_hasNext(it) ; it = listIterator_next(it))
+				{
+					struct StateEdge *se = listIterator_val(it);
+					stateEdge_free(se);
+				}
+				listIterator_release(it);
+			}
+		}
+		state_free(&(a->states[i]));
+	}
+	for (i = 0 ; i < a->nbClocks ; i++)
+	{
+		clock_free(a->clocks[i]);
+	}
+	free(a);
 }
 
 static struct ArrayTwo *arraytwo_new(unsigned int size, int defaultVal)
@@ -1596,10 +1701,10 @@ static struct StringArray *stringArray_newNext(const struct StringArray *prev,
 	ret->s[strlen(ret->s) + 1] = '\0';
 	ret->s[strlen(ret->s)] = c;
 
-	for (i = 0 ; i < g->nbStates ; i++)
+	for (i = 0 ; i < g->a->nbStates ; i++)
 	{
-		struct State *last = &(g->states[ret->lasts[i]]);
-		struct State *next = state_nextCont(last, c);
+		struct State *last = &(g->a->states[ret->lasts[i]]);
+		const struct State *next = state_nextCont(last, c, NULL);
 		ret->array->tab[i][next->index] = 1;
 		ret->lasts[i] = next->index;
 	}
@@ -1693,6 +1798,438 @@ static void computeTree(struct Tree *t, struct Graph *g)
 	}
 }
 
+/*
+ * returns a list of DBMs, not of zones
+ */
+struct List *splitZones2(const struct Zone *z0, const struct Zone *z1)
+{
+	struct List *ret;
+	struct List *dbms = list_new();
+	int i;
+	struct ListIterator *it;
+
+	list_add(dbms, z0->dbm);
+	for (i = 0 ; i < 256 ; i++)
+	{
+		if (z0->s->contSuccs[i] != NULL)
+		{
+			for (it = listIterator_first(z0->s->contSuccs[i]) ; 
+					listIterator_hasNext(it) ; it = listIterator_next(it))
+			{
+				struct StateEdge *se = listIterator_val(it);
+				if (se->to == z1->s)
+				{
+					struct Dbmw *ztmp = dbmw_newcp(z1->dbm);
+					struct Dbmw *z;
+					struct ListIterator *it2;
+
+					for (it2 = listIterator_first(se->resets) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						struct Clock *c = listIterator_val(it2);
+						dbmw_freeClock(ztmp, c);
+					}
+					listIterator_release(it2);
+
+					dbmw_intersection(ztmp, se->dbm);
+					dbmw_intersection(ztmp, z0->dbm);
+					z = dbmw_upTo(z0->dbm, ztmp);
+					dbmw_free(ztmp);
+					list_add(dbms, z);
+				}
+			}
+			listIterator_release(it);
+		}
+		if (z0->s->uncontSuccs[i] != NULL)
+		{
+			for (it = listIterator_first(z0->s->uncontSuccs[i]) ; 
+					listIterator_hasNext(it) ; it = listIterator_next(it))
+			{
+				struct StateEdge *se = listIterator_val(it);
+				if (se->to == z1->s)
+				{
+					struct Dbmw *ztmp = dbmw_newcp(z1->dbm);
+					struct Dbmw *z;
+					struct ListIterator *it2;
+
+					for (it2 = listIterator_first(se->resets) ; 
+							listIterator_hasNext(it2) ; it2 = 
+							listIterator_next(it2))
+					{
+						struct Clock *c = listIterator_val(it2);
+						dbmw_freeClock(ztmp, c);
+					}
+					listIterator_release(it2);
+
+					dbmw_intersection(ztmp, se->dbm);
+					dbmw_intersection(ztmp, z0->dbm);
+					z = dbmw_upTo(z0->dbm, ztmp);
+					dbmw_free(ztmp);
+					list_add(dbms, z);
+				}
+			}
+			listIterator_release(it);
+		}
+	}
+
+	if (z0->s == z1->s)
+	{
+		list_add(dbms, dbmw_upTo(z0->dbm, z1->dbm));
+	}
+
+	ret = dbmw_partition(dbms);
+	list_free(dbms, (void (*)(void *))dbmw_free);
+
+	return ret;
+}
+
+struct List *splitZones(const struct Zone *z, const struct List *rho)
+{
+	struct ListIterator *it;
+	struct List *splits = list_new();
+	struct List *partition;
+	struct List *ret = list_new();
+
+	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Zone *z1 = listIterator_val(it);
+		struct ListIterator *it2;
+		struct List *part = splitZones2(z, z1);
+
+		for (it2 = listIterator_first(part) ; listIterator_hasNext(it2) ; it2 = 
+				listIterator_next(it2))
+		{
+			struct Zone *z2 = listIterator_val(it2);
+			list_add(splits, z2);
+		}
+		listIterator_release(it2);
+	}
+	listIterator_release(it);
+
+	partition = dbmw_partition(splits);
+
+	list_free(splits, (void (*)(void *))dbmw_free);
+
+	for (it = listIterator_first(partition) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Dbmw *dbm = listIterator_val(it);
+		list_add(ret, zone_new(z->s, dbm));
+	}
+
+	return ret;
+}
+
+struct List *pre(const struct Zone *z, const struct List *rho)
+{
+	int i;
+	struct ListIterator *it;
+	struct List *ret = list_new();
+
+	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Zone *z2 = listIterator_val(it);
+		if (z2->s == z->s)
+		{
+			struct Dbmw *dbm = dbmw_upTo(z2->dbm, z->dbm);
+			if (!dbmw_isEmpty(dbm))
+			{
+				list_add(ret, zone_newcp(z2));
+			}
+		}
+		
+		for (i = 0 ; i < 256 ; i++)
+		{
+			if (z2->s->contSuccs[i] != NULL)
+			{
+				struct ListIterator *it2;
+				for (it2 = listIterator_first(z2->s->contSuccs[i]) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct StateEdge *se = listIterator_val(it2);
+					if (se->to == z->s)
+					{
+						struct Dbmw *ztmp = dbmw_newcp(z2->dbm);
+						struct ListIterator *it2;
+
+						dbmw_intersection(ztmp, se->dbm);
+						for (it2 = listIterator_first(se->resets) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							struct Clock *c = listIterator_val(it2);
+							dbmw_reset(ztmp, c);
+						}
+						listIterator_release(it2);
+
+						dbmw_intersection(ztmp, z->dbm);
+						if (!dbmw_isEmpty(ztmp))
+							list_add(ret, zone_newcp(z2));
+						dbmw_free(ztmp);
+					}
+				}
+				listIterator_release(it2);
+			}
+			if (z2->s->uncontSuccs[i] != NULL)
+			{
+				struct ListIterator *it2;
+				for (it2 = listIterator_first(z2->s->uncontSuccs[i]) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct StateEdge *se = listIterator_val(it2);
+					if (se->to == z->s)
+					{
+						struct Dbmw *ztmp = dbmw_newcp(z2->dbm);
+						struct ListIterator *it2;
+
+						dbmw_intersection(ztmp, se->dbm);
+						for (it2 = listIterator_first(se->resets) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							struct Clock *c = listIterator_val(it2);
+							dbmw_reset(ztmp, c);
+						}
+						listIterator_release(it2);
+
+						dbmw_intersection(ztmp, z->dbm);
+						if (!dbmw_isEmpty(ztmp))
+							list_add(ret, zone_newcp(z2));
+						dbmw_free(ztmp);
+					}
+				}
+				listIterator_release(it2);
+			}
+		}
+	}
+	listIterator_release(it);
+
+	return ret;
+}
+
+struct List *post(const struct Zone *z, struct List *rho)
+{
+	int i;
+	struct ListIterator *it;
+	struct List *ret = list_new();
+
+	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct Zone *z2 = listIterator_val(it);
+		if (z2->s == z->s)
+		{
+			struct Dbmw *dbm = dbmw_upTo(z->dbm, z2->dbm);
+			if (!dbmw_isEmpty(dbm))
+			{
+				list_add(ret, zone_newcp(z2));
+			}
+		}
+		
+		for (i = 0 ; i < 256 ; i++)
+		{
+			if (z->s->contSuccs[i] != NULL)
+			{
+				struct ListIterator *it2;
+				for (it2 = listIterator_first(z->s->contSuccs[i]) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct StateEdge *se = listIterator_val(it2);
+					if (se->to == z2->s)
+					{
+						struct Dbmw *ztmp = dbmw_newcp(z->dbm);
+						struct ListIterator *it2;
+
+						dbmw_intersection(ztmp, se->dbm);
+						for (it2 = listIterator_first(se->resets) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							struct Clock *c = listIterator_val(it2);
+							dbmw_reset(ztmp, c);
+						}
+						listIterator_release(it2);
+
+						dbmw_intersection(ztmp, z2->dbm);
+						if (!dbmw_isEmpty(ztmp))
+							list_add(ret, zone_newcp(z2));
+						dbmw_free(ztmp);
+					}
+				}
+				listIterator_release(it2);
+			}
+			if (z->s->uncontSuccs[i] != NULL)
+			{
+				struct ListIterator *it2;
+				for (it2 = listIterator_first(z2->s->uncontSuccs[i]) ; 
+						listIterator_hasNext(it2) ; it2 = 
+						listIterator_next(it2))
+				{
+					struct StateEdge *se = listIterator_val(it2);
+					if (se->to == z2->s)
+					{
+						struct Dbmw *ztmp = dbmw_newcp(z->dbm);
+						struct ListIterator *it2;
+
+						dbmw_intersection(ztmp, se->dbm);
+						for (it2 = listIterator_first(se->resets) ; 
+								listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							struct Clock *c = listIterator_val(it2);
+							dbmw_reset(ztmp, c);
+						}
+						listIterator_release(it2);
+
+						dbmw_intersection(ztmp, z2->dbm);
+						if (!dbmw_isEmpty(ztmp))
+							list_add(ret, zone_newcp(z2));
+						dbmw_free(ztmp);
+					}
+				}
+				listIterator_release(it2);
+			}
+		}
+	}
+	listIterator_release(it);
+
+	return ret;
+}
+
+void computeZoneGraph(struct Graph *g)
+{
+	struct List *rho = list_new();
+	struct List *alpha = list_new();
+	struct List *sigma = list_new();
+	struct List *alpha1;
+	struct ListIterator *it;
+	struct Zone *X, *z;
+	int i, ok;
+
+	for (i = 0 ; i < g->a->nbStates ; i++)
+	{
+		struct Zone *z = zone_new(&(g->a->states[i]), dbmw_new(g->a->nbClocks));
+		list_add(rho, z);
+		if (g->a->states[i].isInitial)
+			list_add(alpha, zone_newcp(z));
+	}
+
+	ok = 1;
+	while (ok)
+	{
+		for (it = listIterator_first(alpha) ; listIterator_hasNext(it) ; it 
+				= listIterator_next(it))
+		{
+			z = listIterator_val(it);
+			if (list_search(sigma, z,
+				(int (*)(const void *, const void *))zone_areEqual) ==
+					NULL)
+			{
+				X = z;
+				break;
+			}
+		}
+		listIterator_release(it);
+
+		alpha1 = splitZones(X, rho);
+		if (list_size(alpha1) == 1)
+		{
+			struct List *posts;
+
+			list_add(sigma, zone_newcp(X));
+
+			posts = post(X, rho);
+
+			for (it = listIterator_first(posts) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				list_add(alpha, z);
+			}
+			listIterator_release(it);
+
+			list_free(posts, NULL);
+			list_free(alpha1, (void (*)(void *))zone_free);
+		}
+		else
+		{
+			struct List *pres;
+
+			list_remove(alpha, X);
+
+			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				struct Zone *Y = listIterator_val(it);
+				if (Y->s->isInitial && dbmw_containsZero(Y->dbm))
+				{
+					list_add(alpha, zone_newcp(Y));
+				}
+			}
+			listIterator_release(it);
+
+			pres = pre(X, rho);
+			for (it = listIterator_first(pres) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				struct Zone *z1 = list_search(sigma, z, (int (*)(const void *, 
+								const void *))zone_areEqual);
+				if (z1 != NULL)
+				{
+					list_remove(sigma, z1);
+				}
+			}
+			listIterator_release(it);
+			list_free(pres, (void (*)(void *))zone_free);
+
+			z = list_search(rho, X, (int (*)(const void *, const void *))zone_areEqual);
+			if (z != NULL)
+				list_remove(rho, z);
+			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				list_add(rho, zone_newcp(z));
+			}
+			listIterator_release(it);
+			
+			list_free(alpha1, (void (*)(void *))zone_free);
+		}
+
+		ok = list_size(alpha) != list_size(sigma);
+		if (!ok)
+		{
+			for (it = listIterator_first(alpha) ; listIterator_hasNext(it) ; it 
+					= listIterator_next(it))
+			{
+				z = listIterator_val(it);
+				if (list_search(sigma, z,
+					(int (*)(const void *, const void *))zone_areEqual) ==
+						NULL)
+				{
+					ok = 1;
+					break;
+				}
+			}
+			listIterator_release(it);
+		}
+	}
+
+	for (it = listIterator_first(rho) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		z = listIterator_val(it);
+		list_add(g->nodes, node_new(g, z->s, z->dbm, NULL, 0));
+	}
+}
+
 struct Graph *graph_newFromAutomaton(const char *filename)
 {
 	const struct List *pstates = NULL;
@@ -1728,7 +2265,10 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	g->nbUnconts = parser_getNbUnconts();
 	createChars(pconts, &(g->contsTable), &(g->contsChars));
 	createChars(punconts, &(g->uncontsTable), &(g->uncontsChars));
-	g->a = timedAutomaton_new(g->contsTable, g->uncontsTable, pstates, pedges);
+	g->a = timedAutomaton_new(g->contsTable, g->uncontsTable, pstates, pclocks, 
+			pedges);
+	computeZoneGraph(g);
+	/*
 	g->baseNodes = malloc(g->nbStates * sizeof *(g->baseNodes));
 	if (g->baseNodes == NULL)
 	{
@@ -1746,7 +2286,7 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	
 	set_applyToAll(W0, node_setWinning, NULL);
 	set_applyToAll(W0, (void (*)(void *, void *))computeStrat, NULL);
-
+	*/
 	parser_cleanup();
 
 	return g;
@@ -1768,11 +2308,11 @@ void graph_free(struct Graph *g)
 	list_free(g->nodesP[1], NULL);
 	list_free(g->nodes, (void (*)(void *))node_free);
 
-	for (i = 0 ; i < g->nbStates ; i++)
+	for (i = 0 ; i < g->a->nbStates ; i++)
 	{
-		state_free(&(g->states[i]));
+		state_free(&(g->a->states[i]));
 	}
-	free(g->states);
+	timedAutomaton_free(g->a);
 	free(g->contsChars);
 	free(g->uncontsChars);
 	free(g);

@@ -29,6 +29,7 @@ void graph_free(struct Graph *);
 const char *node_stateLabel(const struct Node *);
 const char *node_word(const struct Node *);
 int node_owner(const struct Node *);
+const char *node_getConstraints(const struct Node *);
 int node_isAccepting(const struct Node *);
 int node_isInitial(const struct Node *);
 int node_isWinning(const struct Node *);

@@ -26,9 +26,9 @@ AC_CHECK_LIB([gvc], [gvRender], ,
 AC_CHECK_LIB([cgraph], [agset], ,
 	 [AC_MSG_ERROR([Cannot link against libcgraph. Please add the path to 
 	  libcgraph to LDFLAGS (option -L)])])
-AC_CHECK_LIB([udbm], [dbm_init], , AC_MSG_ERROR([Cannot find libudbm. If it is 
+AC_CHECK_LIB([udbm], [dbm_init], , [AC_MSG_ERROR([Cannot find libudbm. If it is 
 			  installed, you should probably add the include directory to 
-			  CPPFLAGS and the library directory to LDFLAGS.]))
+			  CPPFLAGS and the library directory to LDFLAGS.])])
 
 # Checks for header files.
 AC_FUNC_ALLOCA
@@ -39,12 +39,15 @@ AC_CHECK_HEADER([gvc.h], , [AC_MSG_ERROR([cannot find gvc.h. Please set CPPFLAGS
 AC_CHECK_HEADER([list.h], , [AC_MSG_ERROR([Cannot find list.h, provided by\
  libccontainers. Set CPPFLAGS (and probably LDFLAGS) according to your\
  installation])])
+AC_CHECK_HEADER([dbm/dbm.h], , [AC_MSG_ERROR([Cannot find dbm.h, provided by\
+ libudbm. Set CPPFLAGS (and probably LDFLAGS) according to your\
+ installation])])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_TYPE_SIZE_T
 
 # Checks for library functions.
-AC_FUNC_MALLOC
+#AC_FUNC_MALLOC
 AC_CHECK_FUNCS([strdup])
 
 AC_CONFIG_FILES([Makefile
