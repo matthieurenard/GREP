@@ -136,6 +136,12 @@ static int cmpNode(void *val, void *pNode)
 			strcmp(s->word, n->word) == 0);
 }
 
+static int cmpLastBufferChar(void *pNode1, void *pNode2)
+{
+	Node *n1 = pNode1, *n2 = pNode2;
+	return (n1->word[strlen(n1->word)-1] == n2->word[strlen(n2->word)-1]);
+}
+
 static int notSetIn(struct Set *s, void *el)
 {
 	return !set_in(s, el);
@@ -632,14 +638,15 @@ void minimize(struct Graph *g)
 		if (n->owner == 0 && n->p0.predContRcvd != NULL)
 		{
 			struct Node *prev = n->p0.predContRcvd->p1.predStop;
-			struct List *brothers = n->p0.predContRcvd->p1.succsCont;
+			struct List *brothers = list_new();
 			struct Node *prev1 = prev->p0.succStopEmit;
 			int i, same = 1;
 
-			for (it = listIterator_first(brothers) ; listIterator_hasNext(it) ; 
+			for (it = listIterator_first(n->p0.predContRcvd->p1.succsCont) ; listIterator_hasNext(it) ; 
 					it = listIterator_next(it))
 			{
 				Node *brother = listIterator_val(it);
+				list_add(brothers, brother);
 				if (brother->isWinning != prev->isWinning || 
 						brother->p0.strat != prev->p0.strat)
 				{
@@ -825,6 +832,7 @@ void minimize(struct Graph *g)
 				}
 				listIterator_release(it);
 			}
+			list_free(brothers, NULL);
 		}
 	}
 
@@ -945,8 +953,32 @@ void addNodes(struct Graph *g)
 				struct Node *prev = n->p0.predContRcvd->p1.predStop;
 				if (prev->isWinning != n->isWinning || prev->p0.strat != n->p0.strat)
 				{
-					changed = 1;
-					break;
+					if (wordSize <= 1)
+						changed = 1;
+					else
+					{
+						struct ListIterator *it2;
+						for (it2 = 
+								listIterator_first(n->p0.predContRcvd->p1.succsCont) 
+								; listIterator_hasNext(it2) ; it2 = 
+								listIterator_next(it2))
+						{
+							Node *brother = listIterator_val(it2);
+							Node *prevBrother = 
+								list_search(prev->p0.predContRcvd->p1.succsCont, 
+										brother, cmpLastBufferChar);
+							if (brother->isWinning != prevBrother->isWinning || 
+									brother->p0.strat != prevBrother->p0.strat)
+							{
+								changed = 1;
+								break;
+							}
+						}
+						listIterator_release(it2);
+
+					}
+					if (changed)
+						break;
 				}
 			}
 		}
@@ -954,6 +986,7 @@ void addNodes(struct Graph *g)
 
 		wordSize++;
 	} while (changed);
+
 }
 
 void createStates(struct Graph *g, const struct List *states, const struct List 
@@ -1185,7 +1218,7 @@ void drawGraph(struct Graph *g)
 				gdest = agnode(gviz, succ->name, FALSE);
 				if (gdest == NULL)
 				{
-					fprintf(stderr, "ERROR: cannot find gnode %s (3) from %s.\n", 
+					fprintf(stderr, "ERROR: cannot find gnode %s from %s (3).\n", 
 							succ->name, n->name);
 					exit(EXIT_FAILURE);
 				}
