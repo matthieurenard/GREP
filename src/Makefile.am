@@ -13,5 +13,10 @@ libenforcer_la_SOURCES = clock.c \
 						print_game.c \
 						serialize.c \
 						scanner.l \
-						parser.y
+						parser.y \
+						clock.h \
+						dbmutils.h \
+						game_graph.h \
+						print_game.h \
+						serialize.h 
 

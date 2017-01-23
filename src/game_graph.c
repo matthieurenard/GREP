@@ -332,9 +332,9 @@ static void graph_computeTree(struct Tree *, const struct Graph *);
 static void graph_addNodes(struct Graph *, struct Tree *);
 static void graph_addNodesRec(struct Graph *g, const struct Zone *z, const 
 		struct Tree *stringArrays, struct Node *pred);
-static void addEmitEdges(struct Graph *);
-static void addUncontEdges(struct Graph *);
-static void addTimeEdges(struct Graph *);
+static void graph_addEmitEdges(struct Graph *);
+static void graph_addUncontEdges(struct Graph *);
+static void graph_addTimeEdges(struct Graph *);
 static unsigned int graph_contIndex(const struct Graph *g, char c);
 static void graph_computeW0(struct Graph *g, struct Set *ret);
 static void graph_attr(struct Set *ret, struct Graph *g, int player, const 
@@ -2962,7 +2962,7 @@ static void graph_addNodesRec(struct Graph *g, const struct Zone *z, const
 	}
 }
 
-static void addEmitEdges(struct Graph *g)
+static void graph_addEmitEdges(struct Graph *g)
 {
 	struct ListIterator *it;
 	char *remain;
@@ -2996,7 +2996,7 @@ static void addEmitEdges(struct Graph *g)
 	listIterator_release(it);
 }
 
-static void addUncontEdges(struct Graph *g)
+static void graph_addUncontEdges(struct Graph *g)
 {
 	struct ListIterator *it;
 	char *remain;
@@ -3033,7 +3033,7 @@ static void addUncontEdges(struct Graph *g)
 	listIterator_release(it);
 }
 
-static void addTimeEdges(struct Graph *g)
+static void graph_addTimeEdges(struct Graph *g)
 {
 	struct ListIterator *it;
 	char *remain;
@@ -3248,9 +3248,9 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	strings = graph_computeStrings(g);
 	graph_addNodes(g, strings);
 	tree_free(strings, (void (*)(void *))stringArray_free);
-	addEmitEdges(g);
-	addUncontEdges(g);
-	addTimeEdges(g);
+	graph_addEmitEdges(g);
+	graph_addUncontEdges(g);
+	graph_addTimeEdges(g);
 	graph_computeW0(g, W0);
 	
 	set_applyToAll(W0, node_setWinning, NULL);
@@ -3537,6 +3537,23 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	e->realBuffer = fifo;
 }
 
+/* Enforcer DEBUG */
+#if 0
+static void enforcer_printValuation(struct Enforcer *e)
+{
+	int i;
+
+	fprintf(stderr, "{");
+	for (i = 1 ; i < e->g->a->nbClocks ; i++)
+	{
+		fprintf(stderr, "%d", e->valuation[i]);
+		if (i < e->g->a->nbClocks - 1)
+			fprintf(stderr, ", ");
+	}
+	fprintf(stderr, "}");
+}
+#endif
+
 /* Enforcer public interface */
 struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 {
@@ -3755,7 +3772,9 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 {
 	int i, changed = 0;
 	for (i = 1 ; i < e->g->a->nbClocks ; i++)
+	{
 		e->valuation[i] += delay;
+	}
 
 	while (!dbmw_isPointIncluded(e->realNode->z->dbm, e->valuation))
 	{

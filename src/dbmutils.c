@@ -211,24 +211,24 @@ unsigned int dbmw_nextPoint(struct Dbmw *dst, const struct Dbmw *from)
 unsigned int dbmw_distance(const int32_t *val, const struct Dbmw *to)
 {
 	int i;
-	unsigned int max = 0;
+	int max = 0;
 
 	for (i = 1 ; i < to->dim ; i++)
 	{
 		/* take the opposite of to[i], since it is <= -c to say x >= c */
-		unsigned int d = -dbm_raw2bound(to->dbm[i]) - val[i];
+		int d = -dbm_raw2bound(to->dbm[i]) - val[i];
 		if (dbm_rawIsStrict(to->dbm[i]))
 			d++;
-		if (val[i] > -dbm_raw2bound(to->dbm[i]))
+		if (val[i] > dbm_raw2bound(to->dbm[i * to->dim]))
 		{
 			fprintf(stderr, "ERROR: %d > %d\n", val[i], 
-					-dbm_raw2bound(to->dbm[i]));
+					dbm_raw2bound(to->dbm[i] * to->dim));
 			return -1;
 		}
 		max = (d > max) ? d : max;
 	}
 
-	return max;
+	return (unsigned int)max;
 }
 
 /* Reduce the number of elements that are bounded, i.e. give a DBM that 
@@ -589,7 +589,7 @@ void dbmw_print(FILE *f, const struct Dbmw *d, struct Clock **const clocks)
 	}
 	fprintf(f, "}");
 }
-		
+
 char *dbmw_sprint(const struct Dbmw *d, struct Clock **const clocks)
 {
 	int i, j;
