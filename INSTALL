@@ -1,0 +1,99 @@
+In this file, shell inputs are preceded by $ (for a normal user shel) or # (for 
+a privileged user shell, i.e. root).
+
+If all dependencies are already installed and you are using an Ubuntu-like 
+distribution, with all things installed where they are by default, simply 
+running the commands on numbered lines (in the given order) should build the 
+programs.
+
+
+Dependencies:
+	-flex/bison (other lex/yacc implementations have not been tested)
+	-A C compiler (like gcc)
+	-GNU autotools (apt-get install automake on Ubuntu) (autoconf, automake)
+	-GNU libtool
+	-Uppaal DBM library. This can be downloaded from uppaal.org (section 
+download -> uppaal DBM library -> download).
+	-graphviz (apt-get install graphviz-dev on Ubuntu) to print the graphs
+	-ccontainers (included, install them before)
+
+
+The first thing to do to build this software is to generate the configure 
+script:
+
+from the top directory, containing configure.ac
+
+1. $ autoreconf -i
+
+If you modify configure.ac but it seems that the changes are not applied, you 
+can try to force reinstalling everything with the -f flag:
+
+$ autoreconf -fi
+
+We recommend not building in the source tree, rather in a subdir:
+
+from the top directory:
+2. $ mkdir build && cd build
+
+If everything is installed on well-known locations (not by default) :
+
+$ ../configure
+
+You may have to indicate to configure some options, like where to find the 
+Uppaal DBM library. For example, considering it is install in /usr/local/uppaal, 
+with the lib in the lib subdirectory and includes in the include subdirectory:
+
+$ ../configure CPPFLAGS=-I/usr/local/uppaal/include \
+		LDFLAGS=-L/usr/local/uppaal/lib
+
+On Ubuntu systems, with everything installed as default, you will end up with 
+something that looks like this:
+
+4. $ ../configure CPPFLAGS="-I/usr/local/uppaal/include \
+	-I/usr/local/include/ccontainers -I/usr/include/graphviz" \
+	LDFLAGS="-L/usr/local/uppaal/lib -L/usr/local/lib/ccontainers"
+
+You can also give more generic options to configure, like the prefix if the 
+default (/usr/local usually) does not fit your need:
+
+$ ../configure --prefix=/usr/local/enforcer
+
+For more information about the available options, you can run:
+
+$ ../configure --help
+
+Once the configure script has run without error, you can build the libraries and 
+executables:
+
+5. $ make
+
+then install them to the directory you chose (/usr/local by default) by running:
+
+$ make install
+
+By default, since it is in /usr/local:
+
+6. # make install
+
+
+WARNING:
+	You SHOULD compile the uppaal DBM library with the CFLAGS options -DNDEBUG 
+and -fPIC. Not doing so will lead to the library not being linked correctly. See 
+the "Known Bugs" section.
+
+Known Bugs:
+	-If the building process leads to many linker failures against some C++ 
+stuff like std::ostream, this means that you did not build the DBM library with 
+-DNDEBUG, leading to debug errors being printed with the C++ STL. One workaround 
+would be to recompile the DBM library with CFLAGS="-Wall -DNDEBUG -O2 -fPIC". 
+Another one that could possibly work would be to link against the STL when 
+building. This would require modifying the Makefile.am in the directory of the 
+program which failed to build so that it links to ths STL, then running automake 
+and reconfiguring.
+	-If the building process leads to some linker failure stating that objects 
+from libudbm.a can not be relocated, you did not compile it with the -fPIC 
+option. You can again rebuild and install the DBM library with appropriate 
+options (like CFLAGS="-Wall -O2 -DNDEBUG -fPIC"). Another workaround would be to 
+disable the use of shared library by passing the --enable-shared=no to 
+configure. This has not been tested.
+
