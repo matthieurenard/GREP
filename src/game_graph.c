@@ -3559,6 +3559,10 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	{
 		pe = fifo_dequeue(e->realBuffer);
 		fifo_enqueue(fifo, pe);
+		if (!e->stratNode->isLeaf)
+			e->stratNode = 
+				e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
+						pe->c)];
 	}
 
 	if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
@@ -3585,6 +3589,7 @@ static void enforcer_printValuation(struct Enforcer *e)
 }
 #endif
 
+#if 0
 static void printEvent(const struct PrivateEvent *pe)
 {
 	if (pe->c == 'b')
@@ -3592,6 +3597,7 @@ static void printEvent(const struct PrivateEvent *pe)
 	else
 		fprintf(stderr, "%c", pe->c);
 }
+#endif
 
 /* Enforcer public interface */
 struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
@@ -3649,7 +3655,6 @@ enum Strat enforcer_getStrat(const struct Enforcer *e)
 			e->stratNode->realWord);
 	fprintf(e->log, "- strat: %s\n", (e->stratNode->isWinning && e->stratNode != 
 				e->realNode) ? "emit" : "dontemit");
-	fprintf(e->log, "%d\n", e->stratNode->owner);
 #endif
 	if (e->stratNode->isWinning && e->stratNode != e->realNode)
 		return STRAT_EMIT;
@@ -3747,14 +3752,15 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 	}
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Event received : (%u, %s)\n", e->date, event->label);
-	/*fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
+	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
 			e->realNode->realWord, e->stratNode->z->name, 
 			e->stratNode->realWord);
-			*/
+	/*
 	fprintf(e->log, "(%s, %s + ", e->realNode->z->name, 
 			e->realNode->realWord);
 	fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
 	fprintf(e->log, ") - (%s, %s)\n", e->stratNode->z->name, e->stratNode->realWord);
+	*/
 #endif
 
 	return enforcer_computeDelay(e);
@@ -3818,9 +3824,9 @@ unsigned int enforcer_emit(struct Enforcer *e)
 		enforcer_computeStratNode(e);
 
 #ifdef ENFORCER_PRINT_LOG
-	fprintf(e->log, "emit: (%s, %s + ", e->realNode->z->name, 
+	fprintf(e->log, "emit: (%s, %s", e->realNode->z->name, 
 			e->realNode->realWord);
-	fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
+	//fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
 	fprintf(e->log, ") - (%s, %s)\n", e->stratNode->z->name, e->stratNode->realWord);
 #endif
 
