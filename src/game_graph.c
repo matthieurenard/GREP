@@ -3514,20 +3514,51 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	struct PrivateEvent *pe;
 	struct Fifo *fifo;
 
-	e->stratNode = e->realNode;
+	if (fifo_isEmpty(e->realBuffer))
+	{
+		e->stratNode = e->realNode;
+		if (e->stratNode->p0.succEmit != NULL)
+			e->stratNode = e->stratNode->p0.succEmit;
+		return;
+	}
+
 	fifo = fifo_empty();
-	while (!fifo_isEmpty(e->realBuffer))
+	pe = fifo_dequeue(e->realBuffer);
+	fifo_enqueue(fifo, pe);
+	e->stratNode = e->realNode;
+	while (e->stratNode->isLeaf)
+		e->stratNode = e->stratNode->p0.succEmit;
+	e->stratNode = 
+		e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
+				pe->c)];
+	while (!fifo_isEmpty(e->realBuffer) && !e->stratNode->isWinning)
 	{
 		pe = fifo_dequeue(e->realBuffer);
 		fifo_enqueue(fifo, pe);
 
-		if (e->stratNode == e->realNode || !e->stratNode->isWinning)
-		{
-			while (e->stratNode->isLeaf)
-				e->stratNode = e->stratNode->p0.succEmit;
-			e->stratNode = e->stratNode->p0.succStopEmit
-				->p1.succsCont[graph_contIndex(e->g, pe->c)];
-		}
+		while (e->stratNode->isLeaf)
+			e->stratNode = e->stratNode->p0.succEmit;
+		e->stratNode = e->stratNode->p0.succStopEmit
+			->p1.succsCont[graph_contIndex(e->g, pe->c)];
+	}
+	while (!fifo_isEmpty(e->realBuffer) && e->stratNode->p0.succEmit != NULL && 
+			e->stratNode->p0.succEmit->isWinning)
+	{
+		pe = fifo_dequeue(e->realBuffer);
+		fifo_enqueue(fifo, pe);
+
+		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit != NULL && 
+				e->stratNode->p0.succEmit->isWinning)
+			e->stratNode = e->stratNode->p0.succEmit;
+		if (!e->stratNode->isLeaf)
+			e->stratNode = 
+				e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
+						pe->c)];
+	}
+	while (!fifo_isEmpty(e->realBuffer))
+	{
+		pe = fifo_dequeue(e->realBuffer);
+		fifo_enqueue(fifo, pe);
 	}
 
 	if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
@@ -3553,6 +3584,14 @@ static void enforcer_printValuation(struct Enforcer *e)
 	fprintf(stderr, "}");
 }
 #endif
+
+static void printEvent(const struct PrivateEvent *pe)
+{
+	if (pe->c == 'b')
+		fprintf(stderr, "r");
+	else
+		fprintf(stderr, "%c", pe->c);
+}
 
 /* Enforcer public interface */
 struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
@@ -3603,12 +3642,15 @@ struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 
 enum Strat enforcer_getStrat(const struct Enforcer *e)
 {
+#ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "enforcer_getStrat: ");
 	fprintf(e->log, "(%s, %s) - (%s, %s)", e->realNode->z->name, 
-			e->realNode->word, e->stratNode->z->name, e->stratNode->word);
+			e->realNode->realWord, e->stratNode->z->name, 
+			e->stratNode->realWord);
 	fprintf(e->log, "- strat: %s\n", (e->stratNode->isWinning && e->stratNode != 
 				e->realNode) ? "emit" : "dontemit");
 	fprintf(e->log, "%d\n", e->stratNode->owner);
+#endif
 	if (e->stratNode->isWinning && e->stratNode != e->realNode)
 		return STRAT_EMIT;
 	return STRAT_DONTEMIT;
@@ -3703,9 +3745,17 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 		e->realNode = e->realNode->p0.succStopEmit->p1.succsUncont[el->index];
 		enforcer_computeStratNode(e);
 	}
+#ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Event received : (%u, %s)\n", e->date, event->label);
-	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
-			e->realNode->word, e->stratNode->z->name, e->stratNode->word);
+	/*fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
+			e->realNode->realWord, e->stratNode->z->name, 
+			e->stratNode->realWord);
+			*/
+	fprintf(e->log, "(%s, %s + ", e->realNode->z->name, 
+			e->realNode->realWord);
+	fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
+	fprintf(e->log, ") - (%s, %s)\n", e->stratNode->z->name, e->stratNode->realWord);
+#endif
 
 	return enforcer_computeDelay(e);
 }
@@ -3716,10 +3766,12 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	struct SymbolTableEl *sym;
 	struct TimedEvent *te;
 	struct ListIterator *it;
+	struct Dbmw *prevZone = e->realNode->z->dbm;
 
 	if (e->realNode->word[0] == '\0')
 	{
 		fprintf(e->log, "ERROR: cannot emit with an empty buffer.\n");
+		enforcer_free(e);
 		exit(EXIT_FAILURE);
 	}
 	
@@ -3731,7 +3783,9 @@ unsigned int enforcer_emit(struct Enforcer *e)
 		exit(EXIT_FAILURE);
 	}
 
-	fprintf(e->log, "(%u, %s)\n", e->date, sym->sym);
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "emitting (%u, %s)\n", e->date, sym->sym);
+#endif
 
 	te = malloc(sizeof *te);
 	if (te == NULL)
@@ -3759,11 +3813,16 @@ unsigned int enforcer_emit(struct Enforcer *e)
 		e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[pe->index];
 	}
 
-	if (e->stratNode == e->realNode)
+	if (e->stratNode == e->realNode || !dbmw_isPointIncluded(prevZone, 
+				e->valuation))
 		enforcer_computeStratNode(e);
 
-	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
-			e->realNode->word, e->stratNode->z->name, e->stratNode->word);
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "emit: (%s, %s + ", e->realNode->z->name, 
+			e->realNode->realWord);
+	fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
+	fprintf(e->log, ") - (%s, %s)\n", e->stratNode->z->name, e->stratNode->realWord);
+#endif
 
 	return enforcer_computeDelay(e);
 }
@@ -3779,7 +3838,9 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 	while (!dbmw_isPointIncluded(e->realNode->z->dbm, e->valuation))
 	{
 		changed = 1;
-		fprintf(e->log, "Switching to next zone\n");
+#ifdef ENFORCER_PRINT_LOG
+		//fprintf(e->log, "Switching to next zone\n");
+#endif
 		e->realNode = e->realNode->p0.succStopEmit->p1.succTime;
 		if (e->realNode == NULL)
 		{
@@ -3792,6 +3853,12 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 		enforcer_computeStratNode(e);
 
 	e->date += delay;
+
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "delay(%u, t = %u): (%s, %s) - (%s, %s)\n", delay, e->date,
+			e->realNode->z->name, e->realNode->realWord, e->stratNode->z->name, 
+			e->stratNode->realWord);
+#endif
 
 	return enforcer_computeDelay(e);
 }

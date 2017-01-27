@@ -253,7 +253,7 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 	}
 	gvc = gvContext();
 	gvLayout(gvc, gviz, "dot");
-	gvRender(gvc, gviz, "png", outFile);
+	gvRender(gvc, gviz, "pdf", outFile);
 	gvFreeLayout(gvc, gviz);
 
 	agclose(gviz);
@@ -325,7 +325,7 @@ void drawZoneGraph(const struct ZoneGraph *zg, FILE *outFile)
 	}
 	gvc = gvContext();
 	gvLayout(gvc, gviz, "dot");
-	gvRender(gvc, gviz, "png", outFile);
+	gvRender(gvc, gviz, "pdf", outFile);
 	gvFreeLayout(gvc, gviz);
 
 	agclose(gviz);

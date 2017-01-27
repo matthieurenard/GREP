@@ -3,7 +3,7 @@
 
 #include <getopt.h>
 #include <string.h>
-#include <sys/time.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "game_graph.h"
@@ -11,6 +11,9 @@
 #include "parser_offline_input.h"
 
 #define BUFFER_SIZE		256
+#define NTIMES			2048
+#define CLOCK       	CLOCK_PROCESS_CPUTIME_ID
+
 
 enum FileType {AUTOMATON_FILE, GRAPH_FILE, NONE_FILE};
 
@@ -19,6 +22,7 @@ struct Args
 	FILE *drawFile;
 	FILE *drawZoneFile;
 	FILE *logFile;
+	FILE *timeFile;
 	char *saveFilename;
 	enum FileType fileType;
 	char *filename;
@@ -41,6 +45,7 @@ void print_usage(FILE *out, char *progName)
 			"-d, --drawgraph=FILE    print the game graph in FILE\n"
 			"-l, --log-file=FILE     use FILE as log file\n"
 			"-s, --save-graph=FILE   save the graph to FILE (use it with -g)\n"
+			"-s, --time-file=FILE    save times to FILE\n"
 		   );
 }
 
@@ -65,6 +70,7 @@ void initArgs(struct Args *args)
 	args->drawFile = NULL;
 	args->drawZoneFile = NULL;
 	args->saveFilename = NULL;
+	args->timeFile = NULL;
 	args->fileType = NONE_FILE;
 	args->filename = NULL;
 
@@ -83,10 +89,11 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 		{"automaton-file", required_argument, NULL, 'a'},
 		{"graph-file", required_argument, NULL, 'g'},
 		{"save-graph", required_argument, NULL, 's'},
+		{"time-file", required_argument, NULL, 't'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "d:z:l:a:g:s:", longOptions, &optionIndex)) != 
+	while ((c = getopt_long(argc, argv, "d:z:l:a:g:s:t:", longOptions, &optionIndex)) != 
 			-1)
 	{
 		if (c == 0)
@@ -125,6 +132,16 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 
 			case 's':
 				args->saveFilename = optarg;
+			break;
+
+			case 't':
+				args->timeFile = fopen(optarg, "w");
+				if (args->timeFile == NULL)
+				{
+					perror("fopen");
+					fprintf(stderr, "Cannot open %s, times will not be" 
+							" saved.\n", optarg);
+				}
 			break;
 
 			case 'a':
@@ -204,6 +221,9 @@ int main(int argc, char *argv[])
 	unsigned int nextDelay = 0, nextDate = 0, date = 0;
 	struct Fifo *events;
 	struct InputEvent *event = NULL;
+	long unsigned int times[NTIMES];
+	long unsigned int nTimes = 0;
+	struct timespec precTime, currentTime;
 
 	initArgs(&args);
 	parseArgs(argc, argv, &args);
@@ -243,14 +263,69 @@ int main(int argc, char *argv[])
 	while (event != NULL || nextDate > date)
 	{
 		struct Event enfEvent;
+		long int secs, nsecs;
+
+		times[nTimes] = 0;
 
 		/* Read next event */
-		if (event != NULL && (event->date < nextDate || nextDelay == 0))
+		if (event != NULL && (event->date <= nextDate || nextDelay == 0))
 		{
-			enforcer_delay(e, event->date - date);
+			if (args.timeFile != NULL)
+			{
+				if (clock_gettime(CLOCK, &precTime) == -1)
+				{
+					perror("clock_gettime prec delay");
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			if (event->date != date)
+				enforcer_delay(e, event->date - date);
+			if (args.timeFile != NULL)
+			{
+				if (clock_gettime(CLOCK, &currentTime) == -1)
+				{
+					perror("clock_gettime current delay");
+					exit(EXIT_FAILURE);
+				}
+				secs = currentTime.tv_sec - precTime.tv_sec - (precTime.tv_nsec 
+						> currentTime.tv_nsec);
+				nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
+							currentTime.tv_nsec) * 1000000000 - 
+						precTime.tv_nsec);
+				fprintf(args.timeFile, "delay: %lu, ", secs * 1000000000 + nsecs);
+				times[nTimes] += secs * 1000000000 + nsecs;
+			}
+
 			date = event->date;
 			enfEvent.label = event->label;
+			
+			if (args.timeFile != NULL)
+			{
+				if (clock_gettime(CLOCK, &precTime) == -1)
+				{
+					perror("clock_gettime prec eventRcvd");
+					exit(EXIT_FAILURE);
+				}
+			}
+			
 			nextDelay = enforcer_eventRcvd(e, &enfEvent);
+
+			if (args.timeFile != NULL)
+			{
+				if (clock_gettime(CLOCK, &currentTime) == -1)
+				{
+					perror("clock_gettime current eventRcvd");
+					exit(EXIT_FAILURE);
+				}
+				secs = currentTime.tv_sec - precTime.tv_sec - (precTime.tv_nsec 
+						> currentTime.tv_nsec);
+				nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
+							currentTime.tv_nsec) * 1000000000 - 
+						precTime.tv_nsec);
+				fprintf(args.timeFile, "eventRcvd: %lu, ", secs * 1000000000 + nsecs);
+				times[nTimes] += secs * 1000000000 + nsecs;
+			}
 			inputEvent_free(event);
 			if (!fifo_isEmpty(events))
 				event = fifo_dequeue(events);
@@ -261,7 +336,29 @@ int main(int argc, char *argv[])
 		/* Change zone */
 		else if (nextDelay > 0)
 		{
+			if (args.timeFile != NULL && clock_gettime(CLOCK, &precTime) == -1)
+			{
+				perror("clock_gettime prec 2");
+				exit(EXIT_FAILURE);
+			}
+
 			nextDelay = enforcer_delay(e, nextDate - date);
+
+			if (args.timeFile != NULL)
+			{
+				if (clock_gettime(CLOCK, &currentTime) == -1)
+				{
+					perror("clock_gettime current 2");
+					exit(EXIT_FAILURE);
+				}
+				secs = currentTime.tv_sec - precTime.tv_sec - (precTime.tv_nsec > 
+						currentTime.tv_nsec);
+				nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
+							currentTime.tv_nsec) * 1000000000 - precTime.tv_nsec);
+				fprintf(args.timeFile, "delay: %lu, ", secs * 1000000000 + nsecs);
+				times[nTimes] += secs * 1000000000 + nsecs;
+			}
+
 			date = nextDate;
 			nextDate = date + nextDelay;
 		}
@@ -274,12 +371,58 @@ int main(int argc, char *argv[])
 			nextDelay = 0;
 		}
 
+		if (args.timeFile != NULL && clock_gettime(CLOCK, &precTime) == -1)
+		{
+			perror("clock_gettime prec 2");
+			exit(EXIT_FAILURE);
+		}
 		while (enforcer_getStrat(e) == STRAT_EMIT)
 		{
 			nextDelay = enforcer_emit(e);
 			nextDate = date + nextDelay;
 		}
+		if (args.timeFile != NULL)
+		{
+			if (clock_gettime(CLOCK, &currentTime) == -1)
+			{
+				perror("clock_gettime current 2");
+				exit(EXIT_FAILURE);
+			}
+			secs = currentTime.tv_sec - precTime.tv_sec - (precTime.tv_nsec > 
+					currentTime.tv_nsec);
+			nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
+						currentTime.tv_nsec) * 1000000000 - precTime.tv_nsec);
+			fprintf(args.timeFile, "getStrat: %lu, ", secs * 1000000000 + nsecs);
+
+			times[nTimes] += secs * 1000000000 + nsecs;
+			fprintf(args.timeFile, "total: %lu\n", times[nTimes]);
+			nTimes++;
+			/*
+			if (nTimes >= NTIMES)
+			{
+				int j;
+
+				for (j = 0 ; j < nTimes ; j++)
+				{
+					fprintf(args.timeFile, "%lu\n", times[j]);
+				}
+				nTimes = 0;
+			}
+			*/
+		}
 	}
+
+	/*
+	if (args.timeFile != NULL)
+	{
+		int j;
+
+		for (j = 0 ; j < nTimes ; j++)
+		{
+			fprintf(args.timeFile, "%lu\n", times[j]);
+		}
+	}
+	*/
 
 	fprintf(stderr, "%u %u\n", date, nextDate);
 
@@ -289,6 +432,8 @@ int main(int argc, char *argv[])
 
 	if (args.logFile != stderr)
 		fclose(args.logFile);
+	if (args.timeFile != NULL)
+		fclose(args.timeFile);
 
 	return EXIT_SUCCESS;
 }
