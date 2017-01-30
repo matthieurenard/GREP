@@ -2433,7 +2433,14 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 	listIterator_release(it);
 
 	if (!sinkZoneReached)
+	{
+		struct Zone *z = zg->sinkZone;
+		list_remove(zg->zonesS[a->sinkBadState->index], zg->sinkZone);
 		list_remove(zg->zones, zg->sinkZone);
+		zone_free(z);
+		zg->sinkZone = NULL;
+	}
+
 
 	zg->nbZones = list_size(zg->zones);
 
@@ -2766,7 +2773,10 @@ static void zoneGraph_save(const struct ZoneGraph *zg, FILE *f)
 	save_uint64(f, (uint64_t)zg->nbZones);
 
 	save_uint64(f, (uint64_t)zg->z0->index);
-	save_uint64(f, (uint64_t)zg->sinkZone->index);
+	if (zg->sinkZone != NULL)
+		save_uint64(f, (uint64_t)zg->sinkZone->index);
+	else
+		save_uint64(f, (uint64_t)-1);
 
 	for (it = listIterator_first(zg->zones) ; listIterator_hasNext(it) ; it = 
 			listIterator_next(it))
@@ -2804,13 +2814,18 @@ static struct ZoneGraph *zoneGraph_load(FILE *f, const struct Graph *g)
 				z0Index);
 		exit(EXIT_FAILURE);
 	}
-	zg->sinkZone = list_search(zg->zones, &sinkZoneIndex, cmpZoneIndex);
-	if (zg->sinkZone == NULL)
+	if (sinkZoneIndex != -1)
 	{
-		fprintf(stderr, "ERROR: No zone of index %u for sinkZone was found\n", 
-				sinkZoneIndex);
-		exit(EXIT_FAILURE);
+		zg->sinkZone = list_search(zg->zones, &sinkZoneIndex, cmpZoneIndex);
+		if (zg->sinkZone == NULL)
+		{
+			fprintf(stderr, "ERROR: No zone of index %u for sinkZone was" 
+					" found\n", sinkZoneIndex);
+			exit(EXIT_FAILURE);
+		}
 	}
+	else
+		zg->sinkZone = NULL;
 
 	return zg;
 }
@@ -3497,6 +3512,33 @@ static struct Clock *clock_load(FILE *f)
 
 
 /* Enforcer */
+/* Enforcer DEBUG */
+#if 0
+static void enforcer_printValuation(struct Enforcer *e)
+{
+	int i;
+
+	fprintf(stderr, "{");
+	for (i = 1 ; i < e->g->a->nbClocks ; i++)
+	{
+		fprintf(stderr, "%d", e->valuation[i]);
+		if (i < e->g->a->nbClocks - 1)
+			fprintf(stderr, ", ");
+	}
+	fprintf(stderr, "}");
+}
+#endif
+
+#if 0
+static void printEvent(FILE *f, const struct PrivateEvent *pe)
+{
+	if (pe->c == 'b')
+		fprintf(f, "r");
+	else
+		fprintf(f, "%c", pe->c);
+}
+#endif
+
 /* Enforcer private interface */
 static unsigned int enforcer_computeDelay(const struct Enforcer *e)
 {
@@ -3526,20 +3568,22 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	pe = fifo_dequeue(e->realBuffer);
 	fifo_enqueue(fifo, pe);
 	e->stratNode = e->realNode;
-	while (e->stratNode->isLeaf)
+	while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 		e->stratNode = e->stratNode->p0.succEmit;
-	e->stratNode = 
-		e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
-				pe->c)];
+	if (!e->stratNode->isLeaf)
+		e->stratNode = 
+			e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
+					pe->c)];
 	while (!fifo_isEmpty(e->realBuffer) && !e->stratNode->isWinning)
 	{
 		pe = fifo_dequeue(e->realBuffer);
 		fifo_enqueue(fifo, pe);
 
-		while (e->stratNode->isLeaf)
+		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 			e->stratNode = e->stratNode->p0.succEmit;
-		e->stratNode = e->stratNode->p0.succStopEmit
-			->p1.succsCont[graph_contIndex(e->g, pe->c)];
+		if (!e->stratNode->isLeaf)
+			e->stratNode = e->stratNode->p0.succStopEmit
+				->p1.succsCont[graph_contIndex(e->g, pe->c)];
 	}
 	while (!fifo_isEmpty(e->realBuffer) && e->stratNode->p0.succEmit != NULL && 
 			e->stratNode->p0.succEmit->isWinning)
@@ -3547,8 +3591,7 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 		pe = fifo_dequeue(e->realBuffer);
 		fifo_enqueue(fifo, pe);
 
-		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit != NULL && 
-				e->stratNode->p0.succEmit->isWinning)
+		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 			e->stratNode = e->stratNode->p0.succEmit;
 		if (!e->stratNode->isLeaf)
 			e->stratNode = 
@@ -3571,33 +3614,6 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	fifo_free(e->realBuffer);
 	e->realBuffer = fifo;
 }
-
-/* Enforcer DEBUG */
-#if 0
-static void enforcer_printValuation(struct Enforcer *e)
-{
-	int i;
-
-	fprintf(stderr, "{");
-	for (i = 1 ; i < e->g->a->nbClocks ; i++)
-	{
-		fprintf(stderr, "%d", e->valuation[i]);
-		if (i < e->g->a->nbClocks - 1)
-			fprintf(stderr, ", ");
-	}
-	fprintf(stderr, "}");
-}
-#endif
-
-#if 0
-static void printEvent(const struct PrivateEvent *pe)
-{
-	if (pe->c == 'b')
-		fprintf(stderr, "r");
-	else
-		fprintf(stderr, "%c", pe->c);
-}
-#endif
 
 /* Enforcer public interface */
 struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
@@ -3699,10 +3715,11 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 			fifo_enqueue(e->realBuffer, pe);
 		}
 
-		while (e->stratNode->isLeaf)
+		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 			e->stratNode = e->stratNode->p0.succEmit;
 		
-		e->stratNode = e->stratNode->p0.succStopEmit->p1.succsCont[el->index];
+		if (!e->stratNode->isLeaf)
+			e->stratNode = e->stratNode->p0.succStopEmit->p1.succsCont[el->index];
 		if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
 			e->stratNode = e->realNode->p0.succEmit;
 	}
@@ -3817,6 +3834,7 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	{
 		pe = fifo_dequeue(e->realBuffer);
 		e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[pe->index];
+		free(pe);
 	}
 
 	if (e->stratNode == e->realNode || !dbmw_isPointIncluded(prevZone, 

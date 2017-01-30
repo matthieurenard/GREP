@@ -135,7 +135,7 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 			break;
 
 			case 't':
-				args->timeFile = fopen(optarg, "w");
+				args->timeFile = fopen(optarg, "a");
 				if (args->timeFile == NULL)
 				{
 					perror("fopen");
@@ -221,8 +221,7 @@ int main(int argc, char *argv[])
 	unsigned int nextDelay = 0, nextDate = 0, date = 0;
 	struct Fifo *events;
 	struct InputEvent *event = NULL;
-	long unsigned int times[NTIMES];
-	long unsigned int nTimes = 0;
+	long unsigned int time = 0;
 	struct timespec precTime, currentTime;
 
 	initArgs(&args);
@@ -265,7 +264,7 @@ int main(int argc, char *argv[])
 		struct Event enfEvent;
 		long int secs, nsecs;
 
-		times[nTimes] = 0;
+		time = 0;
 
 		/* Read next event */
 		if (event != NULL && (event->date <= nextDate || nextDelay == 0))
@@ -293,8 +292,9 @@ int main(int argc, char *argv[])
 				nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
 							currentTime.tv_nsec) * 1000000000 - 
 						precTime.tv_nsec);
-				fprintf(args.timeFile, "delay: %lu, ", secs * 1000000000 + nsecs);
-				times[nTimes] += secs * 1000000000 + nsecs;
+				//fprintf(args.timeFile, "delay: %lu, ", secs * 1000000000 + 
+				//nsecs);
+				time += secs * 1000000000 + nsecs;
 			}
 
 			date = event->date;
@@ -323,8 +323,8 @@ int main(int argc, char *argv[])
 				nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
 							currentTime.tv_nsec) * 1000000000 - 
 						precTime.tv_nsec);
-				fprintf(args.timeFile, "eventRcvd: %lu, ", secs * 1000000000 + nsecs);
-				times[nTimes] += secs * 1000000000 + nsecs;
+				//fprintf(args.timeFile, "eventRcvd: %lu, ", secs * 1000000000 + nsecs);
+				time += secs * 1000000000 + nsecs;
 			}
 			inputEvent_free(event);
 			if (!fifo_isEmpty(events))
@@ -355,8 +355,9 @@ int main(int argc, char *argv[])
 						currentTime.tv_nsec);
 				nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
 							currentTime.tv_nsec) * 1000000000 - precTime.tv_nsec);
-				fprintf(args.timeFile, "delay: %lu, ", secs * 1000000000 + nsecs);
-				times[nTimes] += secs * 1000000000 + nsecs;
+				//fprintf(args.timeFile, "delay: %lu, ", secs * 1000000000 + 
+				//nsecs);
+				time += secs * 1000000000 + nsecs;
 			}
 
 			date = nextDate;
@@ -392,11 +393,10 @@ int main(int argc, char *argv[])
 					currentTime.tv_nsec);
 			nsecs = currentTime.tv_nsec + ((precTime.tv_nsec > 
 						currentTime.tv_nsec) * 1000000000 - precTime.tv_nsec);
-			fprintf(args.timeFile, "getStrat: %lu, ", secs * 1000000000 + nsecs);
+			//fprintf(args.timeFile, "getStrat: %lu, ", secs * 1000000000 + nsecs);
 
-			times[nTimes] += secs * 1000000000 + nsecs;
-			fprintf(args.timeFile, "total: %lu\n", times[nTimes]);
-			nTimes++;
+			time += secs * 1000000000 + nsecs;
+			fprintf(args.timeFile, "%lu ", time);
 			/*
 			if (nTimes >= NTIMES)
 			{
@@ -424,8 +424,6 @@ int main(int argc, char *argv[])
 	}
 	*/
 
-	fprintf(stderr, "%u %u\n", date, nextDate);
-
 	enforcer_free(e);
 	graph_free(g);
 	fifo_free(events);
@@ -433,7 +431,10 @@ int main(int argc, char *argv[])
 	if (args.logFile != stderr)
 		fclose(args.logFile);
 	if (args.timeFile != NULL)
+	{
+		fprintf(args.timeFile, "\n");
 		fclose(args.timeFile);
+	}
 
 	return EXIT_SUCCESS;
 }
