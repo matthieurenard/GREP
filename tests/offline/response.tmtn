@@ -1,0 +1,30 @@
+automaton
+{
+	cont {A, G, R}
+	uncont {}
+
+	nodes
+	{
+		s0[initial,accepting];
+		s1;
+		s2;
+	}
+
+	clocks {x}
+
+	edges
+	{
+		s0 ->{A}{}{} s0;
+		s0 ->{R}{}{} s2;
+		s0 ->{G}{x}{} s1;
+		s1 ->{A}{}{} s1;
+		s1 ->{R}{x}{x >= 5,x <= 20} s0;
+		s1 ->{R}{}{x < 15} s2;
+		s1 ->{R}{}{x > 20} s2;
+		s1 ->{G}{}{} s2;
+		s2 ->{A}{}{} s2;
+		s2 ->{R}{}{} s2;
+		s2 ->{G}{}{} s2;
+	}
+}
+
