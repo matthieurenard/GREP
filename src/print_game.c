@@ -188,6 +188,7 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 	struct VizNode *nviz;
 	int i;
 	char *colors[5];
+	char *arrowheads[5];
 	char *name;
 
 	colors[EMIT] = "green";
@@ -196,13 +197,21 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 	colors[CONTRCVD] = "orange";
 	colors[TIMELPSD] = "purple";
 
+	arrowheads[EMIT] = "normal";
+	arrowheads[STOPEMIT] = "empty";
+	arrowheads[UNCONTRCVD] = "diamond";
+	arrowheads[CONTRCVD] = "ediamond";
+	arrowheads[TIMELPSD] = "vee";
+
 	gviz = agopen("G", Agdirected, NULL);
 	agattr(gviz, AGRAPH, "overlap", "false");
 	//agattr(gviz, AGRAPH, "ratio", "fill");
 	agattr(gviz, AGNODE, "color", "black");
 	agattr(gviz, AGNODE, "shape", "ellipse");
 	agattr(gviz, AGNODE, "peripheries", "1");
+	agattr(gviz, AGNODE, "style", "solid");
 	agattr(gviz, AGEDGE, "color", "black");
+	agattr(gviz, AGEDGE, "arrowhead", "normal");
 
 	for (it = listIterator_first(graph_getNodes(g)) ; listIterator_hasNext(it) ; it 
 			= listIterator_next(it))
@@ -219,9 +228,12 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 			//agattr(gviz, AGRAPH, "root", agnameof(gnode));
 		}
 		if (node_isWinning(n))
-			agset(gnode, "color", "green");
-		if (node_owner(n) == 0 && node_strat(n) == STRAT_EMIT)
+		{
 			agset(gnode, "color", "blue");
+			if (!node_isInitial(n))
+				agset(gnode, "shape", "rectangle");
+			agset(gnode, "style", "rounded");
+		}
 		nviz = agbindrec(gnode, "Node", sizeof *nviz, FALSE);
 		nviz->n = n;
 		node_setData(n, gnode);
@@ -248,6 +260,7 @@ void drawGraph(const struct Graph *g, FILE *outFile)
 			gedge = agedge(gviz, gnode, gdest, name, TRUE);
 			free(name);
 			agset(gedge, "color", colors[e->type]);
+			agset(gedge, "arrowhead", arrowheads[e->type]);
 		}
 		listIterator_release(it);
 	}

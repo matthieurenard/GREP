@@ -191,12 +191,13 @@ struct Enforcer
 	const struct Graph *g;
 	const struct Node *stratNode;
 	const struct Node *realNode;
-	struct Fifo *realBuffer;
+	struct List *realBuffer;
 	struct Fifo *input;
 	struct Fifo *output;
 	FILE *log;
 	int32_t *valuation;
 	unsigned int date;
+	struct List *strats;
 };
 
 struct TimedEvent
@@ -347,6 +348,11 @@ static struct Clock *clock_load(FILE *);
 /* Enforcer */
 static unsigned int enforcer_computeDelay(const struct Enforcer *);
 static void enforcer_computeStratNode(struct Enforcer *);
+static int enforcer_computeStratsRec(struct Enforcer *, const struct Node *, 
+		struct List *);
+static void enforcer_computeStrats(struct Enforcer *);
+static void enforcer_storeCont(struct Enforcer *, const struct SymbolTableEl *);
+static void enforcer_passUncont(struct Enforcer *, const struct SymbolTableEl *);
 
 /* -------------------------------------------------------------------------- */
 
@@ -359,7 +365,7 @@ static int listIn(struct List *l, void *data)
 static void listAddNoDouble(struct List *l, void *data)
 {
 	if (!listIn(l, data))
-		list_add(l, data);
+		list_append(l, data);
 }
 
 static void removeSetFromList(struct List *l, const struct Set *s)
@@ -611,7 +617,7 @@ static void node_addEdgeNoDouble(struct Node *n, enum EdgeType type, struct Node
 	searchEdge.type = type;
 	searchEdge.succ = succ;
 	if (list_search(n->edges, &searchEdge, cmpEdge) == NULL)
-		list_add(n->edges, edge_new(type, succ));
+		list_append(n->edges, edge_new(type, succ));
 }
 
 static void node_addEdgeStop(struct Node *n, struct Node *succ)
@@ -779,7 +785,7 @@ static struct List *node_loadAll(FILE *f, const struct Graph *g)
 		n->index = index;
 		n->isWinning = isWinning;
 		n->isLeaf = isLeaf;
-		list_add(nodes, n);
+		list_append(nodes, n);
 		free(word);
 	}
 
@@ -1046,7 +1052,7 @@ static void state_loadAll(FILE *f, struct TimedAutomaton *a)
 			nbSuccs = load_uint64(f);
 			for (k = 0 ; k < nbSuccs ; k++)
 			{
-				list_add(a->states[i].contSuccs[(unsigned char)c], 
+				list_append(a->states[i].contSuccs[(unsigned char)c], 
 						stateEdge_load(f, a));
 			}
 		}
@@ -1059,7 +1065,7 @@ static void state_loadAll(FILE *f, struct TimedAutomaton *a)
 			nbSuccs = load_uint64(f);
 			for (k = 0 ; k < nbSuccs ; k++)
 			{
-				list_add(a->states[i].uncontSuccs[(unsigned char)c], 
+				list_append(a->states[i].uncontSuccs[(unsigned char)c], 
 						stateEdge_load(f, a));
 			}
 		}
@@ -1172,7 +1178,7 @@ static struct StateEdge *stateEdge_new(const struct TimedAutomaton *a, const
 			exit(EXIT_FAILURE);
 		}
 		else
-			list_add(ret->resets, c);
+			list_append(ret->resets, c);
 	}
 	listIterator_release(it);
 
@@ -1215,7 +1221,7 @@ static struct StateEdge *stateEdge_load(FILE *f, const struct TimedAutomaton *a)
 	for (i = 0 ; i < n ; i++)
 	{
 		uint64_t clockIndex = load_uint64(f);
-		list_add(e->resets, a->clocks[clockIndex]);
+		list_append(e->resets, a->clocks[clockIndex]);
 	}
 
 	n = load_uint64(f);
@@ -1320,7 +1326,7 @@ static void zone_addEdge(struct Zone *z, const struct Zone *succ, enum EdgeType
 	struct ZoneEdge *edge = zoneEdge_new(type, succ);
 	if (list_search(z->edges, edge, (int (*)(const void *, const void 
 						*))zoneEdge_cmp) == NULL)
-		list_add(z->edges, edge);
+		list_append(z->edges, edge);
 	else
 		zoneEdge_free(edge);
 }
@@ -1440,7 +1446,7 @@ static struct List *zone_loadAll(FILE *f, const struct ZoneGraph *zg, const
 			for (k = 0 ; k < nbResets ; k++)
 			{
 				unsigned int clockIndex = (unsigned int)load_uint64(f);
-				list_add(z->resetsConts[j], zg->a->clocks[clockIndex]);
+				list_append(z->resetsConts[j], zg->a->clocks[clockIndex]);
 			}
 		}
 		for (j = 0 ; j < nbUnconts ; j++)
@@ -1454,7 +1460,7 @@ static struct List *zone_loadAll(FILE *f, const struct ZoneGraph *zg, const
 			for (k = 0 ; k < nbResets ; k++)
 			{
 				unsigned int clockIndex = (unsigned int)load_uint64(f);
-				list_add(z->resetsUnconts[j], zg->a->clocks[clockIndex]);
+				list_append(z->resetsUnconts[j], zg->a->clocks[clockIndex]);
 			}
 		}
 		timeSuccsIndexes[i] = (unsigned int)load_uint64(f);
@@ -1470,7 +1476,7 @@ static struct List *zone_loadAll(FILE *f, const struct ZoneGraph *zg, const
 		sprintf(z->name, "%s, %s", z->s->name, printedZone);
 		free(printedZone);
 
-		list_add(zones, z);
+		list_append(zones, z);
 	}
 
 	for (it = listIterator_first(zones) ; listIterator_hasNext(it) ; it = 
@@ -1706,7 +1712,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 		struct SymbolTableEl *el = listIterator_val(it);
 		for (i = 0 ; i < a->nbStates + 1 ; i++)
 			a->states[i].contSuccs[(unsigned char)el->c] = list_new();
-		list_add(a->sinkBadState->contSuccs[(unsigned char)el->c], 
+		list_append(a->sinkBadState->contSuccs[(unsigned char)el->c], 
 				stateEdge_new(a, a->sinkBadState, list_new(), list_new()));
 	}
 	listIterator_release(it);
@@ -1717,7 +1723,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 		struct SymbolTableEl *el = listIterator_val(it);
 		for (i = 0 ; i < a->nbStates + 1 ; i++)
 			a->states[i].uncontSuccs[(unsigned char)el->c] = list_new();
-		list_add(a->sinkBadState->uncontSuccs[(unsigned char)el->c], 
+		list_append(a->sinkBadState->uncontSuccs[(unsigned char)el->c], 
 				stateEdge_new(a, a->sinkBadState, list_new(), list_new()));
 	}
 	listIterator_release(it);
@@ -1774,7 +1780,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 			}
 			se = stateEdge_new(a, to, parserEdge_getConstraints(pe), 
 					parserEdge_getResets(pe));
-			list_add(from->contSuccs[(unsigned char)el->c], se);
+			list_append(from->contSuccs[(unsigned char)el->c], se);
 		}
 		else
 		{
@@ -1788,7 +1794,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 			}
 			se = stateEdge_new(a, to, parserEdge_getConstraints(pe), 
 					parserEdge_getResets(pe));
-			list_add(from->uncontSuccs[(unsigned char)el->c], se);
+			list_append(from->uncontSuccs[(unsigned char)el->c], se);
 		}
 	}
 	listIterator_release(it);
@@ -2157,14 +2163,15 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 	zg->z0 = NULL;
 	zg->sinkZone = zone_new(a->sinkBadState, dbmw_new(a->nbClocks), zg);
 
+	X = NULL;
 	for (i = 0 ; i < a->nbStates ; i++)
 	{
 		z = zone_new(&(a->states[i]), dbmw_new(a->nbClocks), zg);
-		list_add(rho, z);
+		list_append(rho, z);
 		if (a->states[i].isInitial)
 		{
 			struct Zone *z2 = zone_newcp(z);
-			list_add(alpha, z2);
+			list_append(alpha, z2);
 			X = z2;
 		}
 	}
@@ -2179,7 +2186,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 
 			if (list_search(sigma, X, (int (*)(const void *, const void 
 								*))zone_areEqual) == NULL)
-				list_add(sigma, zone_newcp(X));
+				list_append(sigma, zone_newcp(X));
 
 
 			posts = zoneGraph_post(X, rho);
@@ -2190,7 +2197,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 				z = listIterator_val(it);
 				if (list_search(alpha, z, (int (*)(const void *, const void 
 									*))zone_areEqual) == NULL)
-					list_add(alpha, z);
+					list_append(alpha, z);
 			}
 			listIterator_release(it);
 
@@ -2212,7 +2219,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 						list_search(alpha, Y, (int (*)(const void *, const void 
 									*))zone_areEqual) == NULL)
 				{
-					list_add(alpha, zone_newcp(Y));
+					list_append(alpha, zone_newcp(Y));
 				}
 			}
 			listIterator_release(it);
@@ -2243,7 +2250,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 				z = listIterator_val(it);
 				if (list_search(rho, z, (int (*)(const void *, const void 
 									*))zone_areEqual) == NULL)
-					list_add(rho, zone_newcp(z));
+					list_append(rho, zone_newcp(z));
 			}
 			listIterator_release(it);
 			
@@ -2270,14 +2277,14 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 			listIterator_next(it))
 	{
 		z = listIterator_val(it);
-		list_add(zg->zones, z);
-		list_add(zg->zonesS[z->s->index], z);
+		list_append(zg->zones, z);
+		list_append(zg->zonesS[z->s->index], z);
 	}
 	listIterator_release(it);
 
-	list_add(zg->zones, zg->sinkZone);
+	list_append(zg->zones, zg->sinkZone);
 	zg->zonesS[a->sinkBadState->index] = list_new();
-	list_add(zg->zonesS[a->sinkBadState->index], zg->sinkZone);
+	list_append(zg->zonesS[a->sinkBadState->index], zg->sinkZone);
 
 	sinkZoneReached = 0;
 
@@ -2353,7 +2360,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 						if (dbmw_intersects(dbmtmp, z2->dbm))
 						{
 							z->contSuccs[el->index] = z2;
-							list_addList(z->resetsConts[el->index], se->resets, 
+							list_appendList(z->resetsConts[el->index], se->resets, 
 									NULL);
 							zone_addEdge(z, z2, CONTRCVD);
 							found = 1;
@@ -2408,7 +2415,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 						if (dbmw_intersects(dbmtmp, z2->dbm))
 						{
 							z->uncontSuccs[el->index] = z2;
-							list_addList(z->resetsUnconts[el->index], 
+							list_appendList(z->resetsUnconts[el->index], 
 									se->resets, NULL);
 							zone_addEdge(z, z2, UNCONTRCVD);
 							found = 1;
@@ -2460,7 +2467,7 @@ static struct List *zoneGraph_splitZones2(const struct Zone *z0, const struct
 	int i;
 	struct ListIterator *it;
 
-	list_add(dbms, dbmw_newcp(z0->dbm));
+	list_append(dbms, dbmw_newcp(z0->dbm));
 	for (i = 0 ; i < 256 ; i++)
 	{
 		if (z0->s->contSuccs[i] != NULL)
@@ -2489,7 +2496,7 @@ static struct List *zoneGraph_splitZones2(const struct Zone *z0, const struct
 					{
 						z = dbmw_upTo(z0->dbm, ztmp);
 						if (z != NULL)
-							list_add(dbms, z);
+							list_append(dbms, z);
 					}
 					dbmw_free(ztmp);
 				}
@@ -2522,7 +2529,7 @@ static struct List *zoneGraph_splitZones2(const struct Zone *z0, const struct
 					{
 						z = dbmw_upTo(z0->dbm, ztmp);
 						if (z != NULL)
-							list_add(dbms, z);
+							list_append(dbms, z);
 					}
 					dbmw_free(ztmp);
 				}
@@ -2535,7 +2542,7 @@ static struct List *zoneGraph_splitZones2(const struct Zone *z0, const struct
 	{
 		struct Dbmw *z = dbmw_upTo(z0->dbm, z1->dbm);
 		if (z != NULL)
-			list_add(dbms, z);
+			list_append(dbms, z);
 	}
 
 	ret = dbmw_partition(dbms);
@@ -2563,7 +2570,7 @@ static struct List *zoneGraph_splitZones(const struct Zone *z, const struct List
 				listIterator_next(it2))
 		{
 			struct Dbmw *z2 = listIterator_val(it2);
-			list_add(splits, z2);
+			list_append(splits, z2);
 		}
 		listIterator_release(it2);
 	}
@@ -2577,7 +2584,7 @@ static struct List *zoneGraph_splitZones(const struct Zone *z, const struct List
 			listIterator_next(it))
 	{
 		struct Dbmw *dbm = listIterator_val(it);
-		list_add(ret, zone_new(z->s, dbm, z->zg));
+		list_append(ret, zone_new(z->s, dbm, z->zg));
 	}
 	listIterator_release(it);
 
@@ -2601,7 +2608,7 @@ static struct List *zoneGraph_pre(const struct Zone *z, const struct List *rho)
 			struct Dbmw *dbm = dbmw_upTo(z2->dbm, z->dbm);
 			if (dbm != NULL)
 			{
-				list_add(ret, zone_newcp(z2));
+				list_append(ret, zone_newcp(z2));
 			}
 		}
 		
@@ -2632,7 +2639,7 @@ static struct List *zoneGraph_pre(const struct Zone *z, const struct List *rho)
 
 						dbmw_intersection(ztmp, z->dbm);
 						if (!dbmw_isEmpty(ztmp))
-							list_add(ret, zone_newcp(z2));
+							list_append(ret, zone_newcp(z2));
 						dbmw_free(ztmp);
 					}
 				}
@@ -2663,7 +2670,7 @@ static struct List *zoneGraph_pre(const struct Zone *z, const struct List *rho)
 
 						dbmw_intersection(ztmp, z->dbm);
 						if (!dbmw_isEmpty(ztmp))
-							list_add(ret, zone_newcp(z2));
+							list_append(ret, zone_newcp(z2));
 						dbmw_free(ztmp);
 					}
 				}
@@ -2691,7 +2698,7 @@ static struct List *zoneGraph_post(const struct Zone *z, struct List *rho)
 			struct Dbmw *dbm = dbmw_upTo(z->dbm, z2->dbm);
 			if (dbm != NULL)
 			{
-				list_add(ret, zone_newcp(z2));
+				list_append(ret, zone_newcp(z2));
 				dbmw_free(dbm);
 			}
 		}
@@ -2723,7 +2730,7 @@ static struct List *zoneGraph_post(const struct Zone *z, struct List *rho)
 
 						dbmw_intersection(ztmp, z2->dbm);
 						if (!dbmw_isEmpty(ztmp))
-							list_add(ret, zone_newcp(z2));
+							list_append(ret, zone_newcp(z2));
 						dbmw_free(ztmp);
 					}
 				}
@@ -2754,7 +2761,7 @@ static struct List *zoneGraph_post(const struct Zone *z, struct List *rho)
 
 						dbmw_intersection(ztmp, z2->dbm);
 						if (!dbmw_isEmpty(ztmp))
-							list_add(ret, zone_newcp(z2));
+							list_append(ret, zone_newcp(z2));
 						dbmw_free(ztmp);
 					}
 				}
@@ -2895,7 +2902,7 @@ static void graph_createChars(const struct List *l, struct List **psymbolTable,
 		struct SymbolTableEl *el = symbolTableEl_new(chars[i], 
 				parserSymbol_getLabel(s), parserSymbol_getId(s));
 		el->index = i;
-		list_add(symbolTable, el);
+		list_append(symbolTable, el);
 		elTable[(unsigned char)el->c] = el;
 	}
 	listIterator_release(it);
@@ -2955,8 +2962,8 @@ static void graph_addNodesRec(struct Graph *g, const struct Zone *z, const
 	for (i = 0 ; i < 2 ; i++)
 	{
 		n[i] = node_new(g, z, sa->s, i);
-		list_add(g->nodes, n[i]);
-		list_add(g->nodesP[i], n[i]);
+		list_append(g->nodes, n[i]);
+		list_append(g->nodesP[i], n[i]);
 	}
 
 	node_addEdgeStop(n[0], n[1]);
@@ -3102,7 +3109,7 @@ static void graph_computeW0(struct Graph *g, struct Set *ret)
 			listIterator_next(it))
 	{
 		struct Node *n = listIterator_val(it);
-		list_add(S, n);
+		list_append(S, n);
 		set_add(Sset, n);
 		if (n->isAccepting)
 			set_add(B, n);
@@ -3375,7 +3382,7 @@ struct Graph *graph_load(const char *filename)
 	for (i = 0 ; i < g->nbConts ; i++)
 	{
 		struct SymbolTableEl *el = symbolTableEl_load(f, g);
-		list_add(g->contsTable, el);
+		list_append(g->contsTable, el);
 		g->contsEls[(unsigned char)el->c] = el;
 		g->contsChars[i] = el->c;
 	}
@@ -3395,7 +3402,7 @@ struct Graph *graph_load(const char *filename)
 	for (i = 0 ; i < g->nbUnconts ; i++)
 	{
 		struct SymbolTableEl *el = symbolTableEl_load(f, g);
-		list_add(g->uncontsTable, el);
+		list_append(g->uncontsTable, el);
 		g->uncontsEls[(unsigned char)el->c] = el;
 		g->uncontsChars[el->index] = el->c;
 	}
@@ -3449,7 +3456,7 @@ struct Graph *graph_load(const char *filename)
 			fprintf(stderr, "ERROR: owner must be 0 or 1\n");
 			exit(EXIT_FAILURE);
 		}
-		list_add(g->nodesP[n->owner], n);
+		list_append(g->nodesP[n->owner], n);
 		if (n->owner == 0 && n->word[0] == '\0')
 			g->baseNodes[n->z->index] = n;
 	}
@@ -3551,12 +3558,98 @@ static unsigned int enforcer_computeDelay(const struct Enforcer *e)
 	return 0;
 }
 
+static int enforcer_computeStratsRec(struct Enforcer *e, const struct Node *n, 
+		struct List *strats)
+{
+	struct List *stratsEmit, *stratsWait;
+	int scoreEmit, scoreWait;
+	enum Strat *strat;
+
+	strat = malloc(sizeof *strat);
+	if (strat == NULL)
+	{
+		perror("malloc enforcer_computeStratsRec:strat");
+		exit(EXIT_FAILURE);
+	}
+
+	stratsEmit = list_new();
+	if (n->p0.succEmit != NULL && n->p0.succEmit->isWinning)
+	{
+		struct List *events = list_new();
+		struct Node *next = n->p0.succEmit;
+
+		while (!list_isEmpty(e->realBuffer) && !next->isLeaf)
+		{
+			struct PrivateEvent *pe = list_removeHead(e->realBuffer);
+			list_append(events, pe);
+			next = next->p0.succStopEmit->p1.succsCont[pe->index];
+		}
+		scoreEmit = enforcer_computeStratsRec(e, next, stratsEmit);
+
+		/* Add one to scoreEmit, corresponding to the first event being 
+		 * emitted (not taken into account by the previous call to 
+		 * enforcer_computeStratsRec */
+		scoreEmit++;
+
+		/* list_concatList frees e->realBuffer here */
+		list_concatList(events, e->realBuffer);
+		e->realBuffer = events;
+	}
+	else
+		scoreEmit = -1;
+
+	stratsWait = list_new();
+	if (n->p0.succStopEmit->p1.succTime != NULL && 
+			n->p0.succStopEmit->p1.succTime->isWinning)
+	{
+		scoreWait = enforcer_computeStratsRec(e, 
+				n->p0.succStopEmit->p1.succTime, stratsWait);
+	}
+	else
+		scoreWait = 0;
+
+	if (scoreWait > scoreEmit)
+	{
+		*strat = STRAT_DONTEMIT;
+		list_cleanup(strats, free);
+		list_addHead(stratsWait, strat);
+		list_concatList(strats, stratsWait);
+		list_free(stratsEmit, free);
+
+		return scoreWait;
+	}
+	else
+	{
+		*strat = STRAT_EMIT;
+		list_cleanup(strats, free);
+		list_addHead(stratsEmit, strat);
+		list_concatList(strats, stratsEmit);
+		list_free(stratsWait, free);
+
+		return scoreEmit;
+	}
+}
+
+static void enforcer_computeStrats(struct Enforcer *e)
+{
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "Computing strat...");
+#endif
+
+	list_cleanup(e->strats, free);
+	enforcer_computeStratsRec(e, e->realNode, e->strats);
+
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "Done.\n");
+#endif
+}
+
 static void enforcer_computeStratNode(struct Enforcer *e)
 {
 	struct PrivateEvent *pe;
-	struct Fifo *fifo;
+	struct List *l;
 
-	if (fifo_isEmpty(e->realBuffer))
+	if (list_isEmpty(e->realBuffer))
 	{
 		e->stratNode = e->realNode;
 		if (e->stratNode->p0.succEmit != NULL)
@@ -3564,9 +3657,9 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 		return;
 	}
 
-	fifo = fifo_empty();
-	pe = fifo_dequeue(e->realBuffer);
-	fifo_enqueue(fifo, pe);
+	l = list_new();
+	pe = list_removeHead(e->realBuffer);
+	list_addHead(l, pe);
 	e->stratNode = e->realNode;
 	while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 		e->stratNode = e->stratNode->p0.succEmit;
@@ -3574,10 +3667,10 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 		e->stratNode = 
 			e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
 					pe->c)];
-	while (!fifo_isEmpty(e->realBuffer) && !e->stratNode->isWinning)
+	while (!list_isEmpty(e->realBuffer) && !e->stratNode->isWinning)
 	{
-		pe = fifo_dequeue(e->realBuffer);
-		fifo_enqueue(fifo, pe);
+		pe = list_removeHead(e->realBuffer);
+		list_append(l, pe);
 
 		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 			e->stratNode = e->stratNode->p0.succEmit;
@@ -3585,11 +3678,11 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 			e->stratNode = e->stratNode->p0.succStopEmit
 				->p1.succsCont[graph_contIndex(e->g, pe->c)];
 	}
-	while (!fifo_isEmpty(e->realBuffer) && e->stratNode->p0.succEmit != NULL && 
+	while (!list_isEmpty(e->realBuffer) && e->stratNode->p0.succEmit != NULL && 
 			e->stratNode->p0.succEmit->isWinning)
 	{
-		pe = fifo_dequeue(e->realBuffer);
-		fifo_enqueue(fifo, pe);
+		pe = list_removeHead(e->realBuffer);
+		list_append(l, pe);
 
 		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
 			e->stratNode = e->stratNode->p0.succEmit;
@@ -3598,10 +3691,10 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 				e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
 						pe->c)];
 	}
-	while (!fifo_isEmpty(e->realBuffer))
+	while (!list_isEmpty(e->realBuffer))
 	{
-		pe = fifo_dequeue(e->realBuffer);
-		fifo_enqueue(fifo, pe);
+		pe = list_removeHead(e->realBuffer);
+		list_append(l, pe);
 		if (!e->stratNode->isLeaf)
 			e->stratNode = 
 				e->stratNode->p0.succStopEmit->p1.succsCont[graph_contIndex(e->g, 
@@ -3611,8 +3704,83 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
 		e->stratNode = e->realNode->p0.succEmit;
 
-	fifo_free(e->realBuffer);
-	e->realBuffer = fifo;
+	list_free(e->realBuffer, NULL);
+	e->realBuffer = l;
+}
+
+static void enforcer_storeCont(struct Enforcer *e, const struct SymbolTableEl 
+		*el)
+{
+	char c;
+	struct PrivateEvent *pe;
+
+	c = el->c;
+	if (!e->realNode->isLeaf)
+		e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[el->index];
+	else
+	{
+		pe = malloc(sizeof *pe);
+		if (pe == NULL)
+		{
+			perror("malloc enforcer_eventRcvd:pe");
+			exit(EXIT_FAILURE);
+		}
+
+		pe->c = c;
+		pe->index = el->index;
+		pe->type = CONTROLLABLE;
+		list_append(e->realBuffer, pe);
+	}
+
+	/*
+	   while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
+	   e->stratNode = e->stratNode->p0.succEmit;
+
+	   if (!e->stratNode->isLeaf)
+	   e->stratNode = e->stratNode->p0.succStopEmit->p1.succsCont[el->index];
+	   if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
+	   e->stratNode = e->realNode->p0.succEmit;
+	   */
+
+	enforcer_computeStrats(e);
+}
+
+static void enforcer_passUncont(struct Enforcer *e, const struct 
+		SymbolTableEl *el)
+{
+	struct ListIterator *it;
+	struct TimedEvent *te;
+
+	te = malloc(sizeof *te);
+	if (te == NULL)
+	{
+		perror("malloc enforcer_eventRcvd:te");
+		exit(EXIT_FAILURE);
+	}
+	te->date = e->date;
+	te->event = strdup(el->sym);
+	fifo_enqueue(e->output, te);
+
+	for (it = 
+			listIterator_first(e->realNode->p0.succStopEmit->z->resetsUnconts[el->index]) 
+			; listIterator_hasNext(it) ; it = listIterator_next(it))
+	{
+		struct Clock *c = listIterator_val(it);
+		e->valuation[clock_getIndex(c)] = 0;
+	}
+	listIterator_release(it);
+	e->realNode = e->realNode->p0.succStopEmit->p1.succsUncont[el->index];
+
+	while (!e->realNode->isLeaf && !list_isEmpty(e->realBuffer))
+	{
+		struct PrivateEvent *pe = list_removeHead(e->realBuffer);
+		e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[pe->index];
+	}
+
+	/*
+	enforcer_computeStratNode(e);
+	*/
+	enforcer_computeStrats(e);
 }
 
 /* Enforcer public interface */
@@ -3629,11 +3797,13 @@ struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 	}
 
 	ret->g = g;
-	ret->realBuffer = fifo_empty();
+	ret->realBuffer = list_new();
 	ret->input = fifo_empty();
 	ret->output = fifo_empty();
+	ret->strats = list_new();
 	ret->log = logFile;
 
+	initialNode = NULL;
 	for (i = 0 ; i < g->nbNodes ; i++)
 	{
 		if (g->baseNodes[i]->isInitial)
@@ -3664,6 +3834,9 @@ struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 
 enum Strat enforcer_getStrat(const struct Enforcer *e)
 {
+	enum Strat ret, *strat;
+	
+#if 0
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "enforcer_getStrat: ");
 	fprintf(e->log, "(%s, %s) - (%s, %s)", e->realNode->z->name, 
@@ -3672,60 +3845,47 @@ enum Strat enforcer_getStrat(const struct Enforcer *e)
 	fprintf(e->log, "- strat: %s\n", (e->stratNode->isWinning && e->stratNode != 
 				e->realNode) ? "emit" : "dontemit");
 #endif
-	if (e->stratNode->isWinning && e->stratNode != e->realNode)
-		return STRAT_EMIT;
-	return STRAT_DONTEMIT;
+#endif
+	if (list_isEmpty(e->strats))
+	{
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "strat: dontemit (empty)\n");
+#endif
+
+		return STRAT_DONTEMIT;
+	}
+
+	strat = list_removeHead(e->strats);
+	ret = *strat;
+	free(strat);
+
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "strat: %s\n", (ret == STRAT_EMIT) ? "emit" : "dontemit");
+#endif
+
+	return ret;
 }
 
 unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 {
 	struct SymbolTableEl *el;
-	char c;
-	struct PrivateEvent *pe;
 	struct TimedEvent *te;
+
+	te = malloc(sizeof *te);
+	if (te == NULL)
+	{
+		perror("malloc enforcer_eventRcvd:te");
+		exit(EXIT_FAILURE);
+	}
+	te->date = e->date;
+	te->event = strdup(event->label);
+	fifo_enqueue(e->input, te);
 
 	el = list_search(e->g->contsTable, event->label, cmpSymbolLabel);
 	if (el != NULL)
-	{
-		te = malloc(sizeof *te);
-		if (te == NULL)
-		{
-			perror("malloc enforcer_eventRcvd:te");
-			exit(EXIT_FAILURE);
-		}
-		te->date = e->date;
-		te->event = strdup(el->sym);
-		fifo_enqueue(e->input, te);
-
-		c = el->c;
-		if (!e->realNode->isLeaf)
-			e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[el->index];
-		else
-		{
-			pe = malloc(sizeof *pe);
-			if (pe == NULL)
-			{
-				perror("malloc enforcer_eventRcvd:pe");
-				exit(EXIT_FAILURE);
-			}
-
-			pe->c = c;
-			pe->index = el->index;
-			pe->type = CONTROLLABLE;
-			fifo_enqueue(e->realBuffer, pe);
-		}
-
-		while (e->stratNode->isLeaf && e->stratNode->p0.succEmit->isWinning)
-			e->stratNode = e->stratNode->p0.succEmit;
-		
-		if (!e->stratNode->isLeaf)
-			e->stratNode = e->stratNode->p0.succStopEmit->p1.succsCont[el->index];
-		if (e->stratNode == e->realNode && e->realNode->p0.succEmit != NULL)
-			e->stratNode = e->realNode->p0.succEmit;
-	}
+		enforcer_storeCont(e, el);
 	else
 	{
-		struct ListIterator *it;
 		el = list_search(e->g->uncontsTable, event->label, cmpSymbolLabel);
 		if (el == NULL)
 		{
@@ -3733,39 +3893,8 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 					event->label);
 			return 0;
 		}
+		enforcer_passUncont(e, el);
 
-		te = malloc(sizeof *te);
-		if (te == NULL)
-		{
-			perror("malloc enforcer_eventRcvd:te");
-			exit(EXIT_FAILURE);
-		}
-		te->date = e->date;
-		te->event = strdup(el->sym);
-		fifo_enqueue(e->input, te);
-
-		te = malloc(sizeof *te);
-		if (te == NULL)
-		{
-			perror("malloc enforcer_eventRcvd:te");
-			exit(EXIT_FAILURE);
-		}
-		te->date = e->date;
-		te->event = strdup(el->sym);
-		fifo_enqueue(e->output, te);
-
-		c = el->c;
-
-		for (it = 
-				listIterator_first(e->realNode->p0.succStopEmit->z->resetsUnconts[el->index]) 
-				; listIterator_hasNext(it) ; it = listIterator_next(it))
-		{
-			struct Clock *c = listIterator_val(it);
-			e->valuation[clock_getIndex(c)] = 0;
-		}
-		listIterator_release(it);
-		e->realNode = e->realNode->p0.succStopEmit->p1.succsUncont[el->index];
-		enforcer_computeStratNode(e);
 	}
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Event received : (%u, %s)\n", e->date, event->label);
@@ -3830,9 +3959,9 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	}
 	listIterator_release(it);
 	e->realNode = e->realNode->p0.succEmit;
-	while (!fifo_isEmpty(e->realBuffer) && !e->realNode->isLeaf)
+	while (!list_isEmpty(e->realBuffer) && !e->realNode->isLeaf)
 	{
-		pe = fifo_dequeue(e->realBuffer);
+		pe = list_removeHead(e->realBuffer);
 		e->realNode = e->realNode->p0.succStopEmit->p1.succsCont[pe->index];
 		free(pe);
 	}
@@ -3874,7 +4003,10 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 	}
 
 	if (changed)
+		/*
 		enforcer_computeStratNode(e);
+		*/
+		enforcer_computeStrats(e);
 
 	e->date += delay;
 
@@ -3922,9 +4054,9 @@ void enforcer_free(struct Enforcer *e)
 		struct SymbolTableEl *el = e->g->contsEls[(unsigned char)*(s++)];
 		fprintf(e->log, "%s ", el->sym);
 	}
-	while (!fifo_isEmpty(e->realBuffer))
+	while (!list_isEmpty(e->realBuffer))
 	{
-		struct PrivateEvent *pe = fifo_dequeue(e->realBuffer);
+		struct PrivateEvent *pe = list_removeHead(e->realBuffer);
 		struct SymbolTableEl *el = list_search(e->g->contsTable, &(pe->c), 
 				cmpSymbolChar);
 		if (el == NULL)
@@ -3937,7 +4069,7 @@ void enforcer_free(struct Enforcer *e)
 		free(pe);
 	}
 	fprintf(e->log, "\n");
-	fifo_free(e->realBuffer);
+	list_free(e->realBuffer, NULL);
 	free(e->valuation);
 
 	fprintf(e->log, "VERDICT: %s\n", (e->realNode->isAccepting) ? "WIN" : 

@@ -45,7 +45,7 @@ void print_usage(FILE *out, char *progName)
 			"-d, --drawgraph=FILE    print the game graph in FILE\n"
 			"-l, --log-file=FILE     use FILE as log file\n"
 			"-s, --save-graph=FILE   save the graph to FILE (use it with -g)\n"
-			"-s, --time-file=FILE    save times to FILE\n"
+			"-t, --time-file=FILE    save times to FILE\n"
 		   );
 }
 
@@ -259,18 +259,22 @@ int main(int argc, char *argv[])
 	}
 	else
 		nextDelay = 0;
+	time = 0;
 	while (event != NULL || nextDate > date)
 	{
 		struct Event enfEvent;
 		long int secs, nsecs;
-
-		time = 0;
 
 		/* Read next event */
 		if (event != NULL && (event->date <= nextDate || nextDelay == 0))
 		{
 			if (args.timeFile != NULL)
 			{
+				if (time != 0)
+				{
+					fprintf(args.timeFile, "%lu ", time);
+					time = 0;
+				}
 				if (clock_gettime(CLOCK, &precTime) == -1)
 				{
 					perror("clock_gettime prec delay");
@@ -396,7 +400,6 @@ int main(int argc, char *argv[])
 			//fprintf(args.timeFile, "getStrat: %lu, ", secs * 1000000000 + nsecs);
 
 			time += secs * 1000000000 + nsecs;
-			fprintf(args.timeFile, "%lu ", time);
 			/*
 			if (nTimes >= NTIMES)
 			{
@@ -432,7 +435,7 @@ int main(int argc, char *argv[])
 		fclose(args.logFile);
 	if (args.timeFile != NULL)
 	{
-		fprintf(args.timeFile, "\n");
+		fprintf(args.timeFile, "%lu\n", time);
 		fclose(args.timeFile);
 	}
 

@@ -315,7 +315,7 @@ struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 			if (dbm_constrainC(Ztmp->dbm, Ztmp->dim, negConstraint) &&
 					dbmw_intersection(Ztmp, Zremain))
 			{
-				list_add(ret, Ztmp);
+				list_append(ret, Ztmp);
 				Ztmp = dbmw_new(n);
 				if (dbm_constrainC(Ztmp->dbm, Ztmp->dim, constraint))
 					dbmw_intersection(Zremain, Ztmp);
@@ -344,12 +344,12 @@ struct List *dbmw_partition2(const struct Dbmw *Z0, const struct Dbmw *Z1)
 	struct ListIterator *it;
 
 	if (dbmw_intersection(dbm, Z1))
-		list_add(ret, dbm);
+		list_append(ret, dbm);
 	else
 	{
 		dbmw_free(dbm);
-		list_add(ret, dbmw_newcp(Z0));
-		list_add(ret, dbmw_newcp(Z1));
+		list_append(ret, dbmw_newcp(Z0));
+		list_append(ret, dbmw_newcp(Z1));
 		return ret;
 	}
 
@@ -358,7 +358,7 @@ struct List *dbmw_partition2(const struct Dbmw *Z0, const struct Dbmw *Z1)
 			listIterator_next(it))
 	{
 		dbm = listIterator_val(it);
-		list_add(ret, dbm);
+		list_append(ret, dbm);
 	}
 	listIterator_release(it);
 	list_free(l, NULL);
@@ -368,7 +368,7 @@ struct List *dbmw_partition2(const struct Dbmw *Z0, const struct Dbmw *Z1)
 			listIterator_next(it))
 	{
 		dbm = listIterator_val(it);
-		list_add(ret, dbm);
+		list_append(ret, dbm);
 	}
 	listIterator_release(it);
 
@@ -395,7 +395,7 @@ struct List *dbmw_partition(const struct List *zones)
 	{
 		struct Dbmw *dbm = listIterator_val(it);
 		if (i == 0)
-			list_add(ret, dbmw_newcp(dbm));
+			list_append(ret, dbmw_newcp(dbm));
 		else
 			fifo_enqueue(wait, dbmw_newcp(dbm));
 	}
@@ -424,7 +424,7 @@ struct List *dbmw_partition(const struct List *zones)
 
 		if (!changed && list_search(ret, Z, (int (*)(const void *, const void 
 							*))dbmw_areEqual) == NULL)
-			list_add(ret, Z);
+			list_append(ret, Z);
 		else
 		{
 			struct List *ZUZi = dbmw_partition2(Z, Zi);

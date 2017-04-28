@@ -286,7 +286,7 @@ letterlist:		letter
 					sym->isCont = -1;
 					sym->label = $1;
 					$$ = list_new();
-					list_add($$, sym);
+					list_append($$, sym);
 				}
 			|	letterlist sep letter
 				{
@@ -300,7 +300,7 @@ letterlist:		letter
 					sym->id = symId++;
 					sym->isCont = -1;
 					sym->label = $3;
-					list_add($1, sym);
+					list_append($1, sym);
 					$$ = $1;
 				}
 ;
@@ -327,8 +327,8 @@ defnodes: 	NODE optends '{' optlistnodes '}'
 optlistnodes: 	optends						{$$ = list_new();}
 				| optends listnodes optsep	{$$ = $2;}
 
-listnodes:	defnode					{$$ = list_new(); list_add($$, $1);}
-			| listnodes sep defnode	{list_add($1, $3); $$ = $1;}
+listnodes:	defnode					{$$ = list_new(); list_append($$, $1);}
+			| listnodes sep defnode	{list_append($1, $3); $$ = $1;}
 ;
 
 defnode:	node nodeattrs {$1->attrs = $2; $$ = $1;}
@@ -386,7 +386,7 @@ listclocknames: ID
 					clock->id = clockId++;
 					clock->name = $1;
 					$$ = list_new();
-					list_add($$, clock);
+					list_append($$, clock);
 				}
 				| listclocknames sep ID
 				{
@@ -401,7 +401,7 @@ listclocknames: ID
 					clock->id = clockId++;
 					clock->name = $3;
 					a->nbClocks++;
-					list_add($1, clock);
+					list_append($1, clock);
 					$$ = $1;
 				}
 ;
@@ -417,8 +417,8 @@ optlistedges:	optends						{$$ = list_new();}
 				| optends listedges optsep	{$$ = $2;}
 ;
 
-listedges:	defedge					{$$ = list_new(); list_add($$, $1);}
-			| listedges sep defedge	{$$ = list_add($1, $3);}
+listedges:	defedge					{$$ = list_new(); list_append($$, $1);}
+			| listedges sep defedge	{$$ = list_append($1, $3);}
 ;
 
 defedge: ID EDGE '{' symbol '}' '{' listclocks '}' '{' listconstraints '}' ID
@@ -472,8 +472,8 @@ symbol:	ID
 ;
 
 listclocks:							{$$ = list_new();}
-		  	| clock					{$$ = list_add(list_new(), $1);}
-			| listclocks sep clock 	{$$ = list_add($1, $3);}
+		  	| clock					{$$ = list_append(list_new(), $1);}
+			| listclocks sep clock 	{$$ = list_append($1, $3);}
 ;
 
 clock:	ID
@@ -490,8 +490,8 @@ clock:	ID
 ;
 
 listconstraints: 							{$$ = list_new();}
-				| constraint				{$$ = list_add(list_new(), $1);}
-				| listconstraints sep constraint	{$$ = list_add($1, $3);}
+				| constraint				{$$ = list_append(list_new(), $1);}
+				| listconstraints sep constraint	{$$ = list_append($1, $3);}
 ;
 
 constraint:	ID rel INTEGER

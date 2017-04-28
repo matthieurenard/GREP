@@ -70,7 +70,7 @@
 				exit(EXIT_FAILURE);
 			}
 
-			list_add(l, s);
+			list_append(l, s);
 		}
 		s[i++] = (char)c;
 		if (i >= 511)
