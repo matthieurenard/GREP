@@ -186,6 +186,14 @@ struct Graph
 	unsigned int nbZones;
 };
 
+struct StratNode
+{
+	const struct Node *n;
+	int score;
+	struct List *strats;
+	struct ListIterator *events;
+};
+
 struct Enforcer
 {
 	const struct Graph *g;
@@ -198,6 +206,9 @@ struct Enforcer
 	int32_t *valuation;
 	unsigned int date;
 	struct List *strats;
+	struct StratNode *strat;
+	struct List *leaves;
+	struct List *badLeaves;
 };
 
 struct TimedEvent
@@ -340,6 +351,11 @@ static unsigned int graph_contIndex(const struct Graph *g, char c);
 static void graph_computeW0(struct Graph *g, struct Set *ret);
 static void graph_attr(struct Set *ret, struct Graph *g, int player, const 
 		struct Set *U, struct List *nodes);
+
+/* StratNode */
+static struct StratNode *stratNode_new(const struct Node *, int, struct List *, 
+		struct ListIterator *);
+static void stratNode_free(struct StratNode *);
 
 /* Clock save/load */
 static void clock_save(const struct Clock *, FILE *);
@@ -3499,6 +3515,34 @@ void graph_free(struct Graph *g)
 }
 
 
+/* StratNode */
+static struct StratNode *stratNode_new(const struct Node *n, int score, struct 
+		List *l, struct ListIterator *it)
+{
+	struct StratNode *sn = malloc(sizeof *sn);
+
+	if (sn == NULL)
+	{
+		perror("malloc stratNode_new:sn");
+		exit(EXIT_FAILURE);
+	}
+
+	sn->n = n;
+	sn->score = score;
+	sn->strats = l;
+	sn->events = it;
+
+	return sn;
+}
+
+static void stratNode_free(struct StratNode *sn)
+{
+	list_free(sn->strats, NULL);
+	listIterator_release(sn->events);
+	free(sn);
+}
+
+
 /* Clock save/load functions (here to be static) */
 static void clock_save(const struct Clock *c, FILE *f)
 {
@@ -3630,14 +3674,164 @@ static int enforcer_computeStratsRec(struct Enforcer *e, const struct Node *n,
 	}
 }
 
-static void enforcer_computeStrats(struct Enforcer *e)
+static void enforcer_computeStrats(struct Enforcer *e, int clear)
 {
+	struct ListIterator *it;
+	struct StratNode *max;
+
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Computing strat...");
 #endif
 
+	if (clear)
+	{
+		list_cleanup(e->leaves, (void (*)(void *))stratNode_free);
+		list_cleanup(e->badLeaves, (void (*)(void *))stratNode_free);
+
+		if (e->realNode->p0.succEmit != NULL && 
+				e->realNode->p0.succEmit->isWinning)
+		{
+			struct ListIterator *it = listIterator_first(e->realBuffer);
+			struct Node *next = e->realNode->p0.succEmit;
+
+			while (!next->isLeaf && listIterator_hasNext(it))
+			{
+				struct PrivateEvent *pe = listIterator_val(it);
+				next = next->p0.succStopEmit->p1.succsCont[pe->index];
+				it = listIterator_next(it);
+			}
+			list_append(leaves, stratNode_new(next, 1, list_append(list_new(), 
+							(uintptr_t)STRAT_EMIT), it));
+		}
+		if (e->realNode->p0.succStopEmit->p1.succTime != NULL && 
+				e->realNode->p0.succStopEmit->p1.succTime->isWinning)
+		{
+			list_addHead(leaves, 
+					stratNode_new(e->realNode->p0.succStopEmit->p1.succTime, 
+						list_append(list_new(), 0, (uintptr_t)STRAT_DONTEMIT), 
+						listIterator_first(e->realBuffer)));
+		}
+	}
+	else /* Controllable event received */
+	{
+		struct List *newLeaves = list_new();
+		struct PrivateEvent *pe = list_last(e->realBuffer);
+
+		while (!list_isEmpty(e->badLeaves))
+		{
+			struct StratNode *sn = list_removeHead(leavesNotLeaves);
+
+			sn->n = sn->n->p0.succStopEmit->p1.succsCont[pe->index];
+
+			if (sn->n->isWinning)
+			{
+				listIterator_release(sn->events);
+				sn->events = listIterator_last(e->realBuffer);
+				list_add(leaves, sn);
+			}
+			else if (!sn->n->isLeaf)
+				list_add(newLeaves, sn);
+		}
+
+		list_concatList(leavesNotLeaves, newLeaves);
+	}
+			
+	while (list_size(leaves) > 1)
+	{
+		struct StratNode *sn = list_removeHead(leaves);
+
+		if (sn->n->p0.succEmit != NULL)
+		{
+			struct ListIterator *it = 
+				listIterator_next(listIterator_cp(sn->events));
+			struct Node *next = sn->n->p0.succEmit;
+
+			while (!next->isLeaf && listIterator_hasNext(it))
+			{
+				struct PrivateEvent *pe = listIterator_val(it);
+				next = next->p0.succStopEmit->p1.succsCont[pe->index];
+				it = listIterator_next(it);
+			}
+			if (next->isWinning)
+				list_append(leaves, stratNode_new(next, sn->score + 1, 
+							list_append(list_cp(sn->strats), 
+								(uintptr_t)STRAT_EMIT), it));
+			else if (!listIterator_hasNext(it) && !next->isLeaf)
+				list_append(leavesNotLeaves, stratNode_new(next, sn->score + 1, 
+							list_append(list_cp(sn->strats), 
+								(uintptr_t)STRAT_EMIT, it)));
+			else
+				listIterator_release(it);
+
+			if (limit == NULL)
+				limit = list_last(leaves);
+		}
+		if (sn->n->p0.succStopEmit->p1.succTime != NULL) 
+		{
+			struct ListIterator *it = listIterator_cp(sn->events);
+
+			if (sn->n->p0.succStopEmit->p1.succTime->isWinning)
+			{
+				list_addHead(leaves, 
+						stratNode_new(sn->n->p0.succStopEmit->p1.succTime, 
+							sn->score,  list_append(list_new(), 
+								(uintptr_t)STRAT_DONTEMIT), it));
+			}
+			else if (!sn->n->p0.succStopEmit->p1.succTime->isLeaf)
+			{
+				list_append(leavesNotLeaves, 
+						stratNode_new(sn->n->p0.succStopEmit->p1.succTime, 
+							sn->score,  list_append(list_cp(sn->strats, (void 
+										(*)(void *))stratNode_cp), 
+								(uintptr_t)STRAT_DONTEMIT), it));
+			}
+			else
+				listIterator_release(it);
+		}
+
+		if (list_size(leaves) == 0 && sn->n->isWinning)
+			list_append(sn);
+	}
+
+	max = NULL;
+	for (it = listIterator_first(leaves) ; listIterator_hasNext(it) ; it = 
+			listIterator_next(it))
+	{
+		struct ListIterator *itSn, *itMax;
+		struct StratNode *sn = listIterator_val(it);
+
+		if (max == NULL || max->score < sn->score)
+			max = sn;
+		if (max->score == sn->score)
+		{
+			for (itSn = listIterator_first(sn->strats), itMax = 
+					listIterator_first(max->strats) ; listIterator_hasNext(itSn) 
+					; itSn = listIterator_next(itSn), itMax = 
+					listIterator_next(itMax))
+			{
+				enum Strat stratSn = (enum Strat)((uintptr_t)listIterator_val(itSn));
+				enum Strat stratMax = (enum Strat)((uintptr_t)listIterator_val(itMax));
+
+				if (stratSn != stratMax && stratSn == STRAT_EMIT)
+				{
+					max = sn;
+					break;
+				}
+			}
+			listIterator_release(itSn);
+			listIterator_release(itMax);
+		}
+	}
+
+	if (max != NULL)
+		e->strats = list_cp();
+	else
+		e->strats = emptyList;
+
+	/*
 	list_cleanup(e->strats, free);
 	enforcer_computeStratsRec(e, e->realNode, e->strats);
+	*/
 
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Done.\n");
@@ -3742,7 +3936,7 @@ static void enforcer_storeCont(struct Enforcer *e, const struct SymbolTableEl
 	   e->stratNode = e->realNode->p0.succEmit;
 	   */
 
-	enforcer_computeStrats(e);
+	enforcer_computeStrats(e, 0);
 }
 
 static void enforcer_passUncont(struct Enforcer *e, const struct 
@@ -3780,7 +3974,7 @@ static void enforcer_passUncont(struct Enforcer *e, const struct
 	/*
 	enforcer_computeStratNode(e);
 	*/
-	enforcer_computeStrats(e);
+	enforcer_computeStrats(e, 1);
 }
 
 /* Enforcer public interface */
@@ -3801,6 +3995,9 @@ struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 	ret->input = fifo_empty();
 	ret->output = fifo_empty();
 	ret->strats = list_new();
+	ret->strat = NULL;
+	ret->leaves = list_new();
+	ret->badLeaves = list_new();
 	ret->log = logFile;
 
 	initialNode = NULL;
