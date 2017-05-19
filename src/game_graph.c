@@ -232,7 +232,9 @@ static void listAddNoDouble(struct List *l, void *data);
 static void removeSetFromList(struct List *l, const struct Set *s);
 
 /* Comparison functions used with list_search */
+#if 0
 static int cmpSymbolChar(const void *val, const void *pel);
+#endif
 static int cmpSymbolLabel(const void *val, const void *pel);
 static int cmpSymId(const void *val, const void *pel);
 static int cmpEdge(const void *pe1, const void *pe2);
@@ -363,7 +365,9 @@ static struct Clock *clock_load(FILE *);
 
 /* Enforcer */
 static unsigned int enforcer_computeDelay(const struct Enforcer *);
+#if 0
 static void enforcer_computeStratNode(struct Enforcer *);
+#endif
 #if 0
 static int enforcer_computeStratsRec(struct Enforcer *, const struct Node *, 
 		struct List *);
@@ -393,12 +397,14 @@ static void removeSetFromList(struct List *l, const struct Set *s)
 
 
 /* Functions to use with list_search */
+#if 0
 static int cmpSymbolChar(const void *val, const void *pel)
 {
 	const struct SymbolTableEl *el = pel;
 	const char c = *(const char *)val;
 	return (el->c == c);
 }
+#endif
 
 static int cmpSymbolLabel(const void *val, const void *pel)
 {
@@ -3687,7 +3693,6 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Computing strat...");
-	fprintf(stderr, "STRAT_EMIT = %x\n", (void *)(uintptr_t)STRAT_EMIT);
 #endif
 
 	if (list_isEmpty(e->realBuffer))
@@ -3699,7 +3704,26 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 	firstEvent = listIterator_first(e->realBuffer);
 	i = 0;
 	while (e->realNode->word[i++] != '\0')
+	{
+		if (!listIterator_hasNext(firstEvent))
+		{
+			fprintf(stderr, "ERROR: realBuffer not matching realNode\n");
+			fprintf(stderr, "realBuffer: ");
+			for (it = listIterator_first(e->realBuffer) ; 
+					listIterator_hasNext(it) ; it = listIterator_next(it))
+			{
+				struct PrivateEvent *pe = listIterator_val(it);
+				struct SymbolTableEl *sym = e->g->contsEls[(unsigned char)pe->c];
+				fprintf(stderr, "%s ", sym->sym);
+			}
+			listIterator_release(it);
+			fprintf(stderr, "\nrealNode: (%s, %s)\n", e->realNode->z->name, e->realNode->realWord);
+			enforcer_free(e);
+			exit(EXIT_FAILURE);
+		}
+
 		firstEvent = listIterator_next(firstEvent);
+	}
 
 	/* Put something in enforcer_new instead ? */
 	if (list_isEmpty(e->leaves) && list_isEmpty(e->badLeaves))
@@ -3722,15 +3746,9 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 				next = next->p0.succStopEmit->p1.succsCont[pe->index];
 				it = listIterator_next(it);
 			}
-			struct StratNode *sn = stratNode_new(next, 1, 
-					list_append(list_new(), (void *)(uintptr_t)STRAT_EMIT), it);
-			fprintf(stderr, "STRAT: %x\n", (uintptr_t)list_first(sn->strats));
-			list_append(e->leaves, sn);
-			fprintf(stderr, "next: (%s, %s)\n", next->z->name, next->realWord);
-			sn = list_last(e->leaves);
-			fprintf(stderr, "sn: (%s, %s)\n", sn->n->z->name, sn->n->realWord);
-			fprintf(stderr, "FIRST: %x\n", (enum 
-						Strat)(uintptr_t)list_first(sn->strats));
+			list_append(e->leaves, stratNode_new(next, 1, 
+						list_append(list_new(), (void *)(uintptr_t)STRAT_EMIT), 
+						it));
 		}
 		if (e->realNode->p0.succStopEmit->p1.succTime != NULL && 
 				e->realNode->p0.succStopEmit->p1.succTime->isWinning)
@@ -3772,8 +3790,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 
 		if (sn->n->p0.succEmit != NULL)
 		{
-			struct ListIterator *it = 
-				listIterator_next(listIterator_cp(sn->events));
+			struct ListIterator *it = listIterator_cp(sn->events);
 			struct Node *next = sn->n->p0.succEmit;
 
 			while (!next->isLeaf && listIterator_hasNext(it))
@@ -3833,15 +3850,13 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 		struct ListIterator *itSn, *itMax;
 		struct StratNode *sn = listIterator_val(it);
 
-		fprintf(stderr, "leaf: (%s, %s)\n", sn->n->z->name, sn->n->realWord);
-		fprintf(stderr, "First strat: %x\n", list_first(sn->strats));
-
 		if (e->strat == NULL || e->strat->score < sn->score)
 			e->strat = sn;
 		else if (e->strat->score == sn->score)
 		{
 			for (itSn = listIterator_first(sn->strats), itMax = 
-					listIterator_first(e->strat->strats) ; listIterator_hasNext(itSn) 
+					listIterator_first(e->strat->strats) ; 
+					listIterator_hasNext(itSn) && listIterator_hasNext(itMax)
 					; itSn = listIterator_next(itSn), itMax = 
 					listIterator_next(itMax))
 			{
@@ -3856,6 +3871,10 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 					break;
 				}
 			}
+
+			if (!listIterator_hasNext(itSn) && listIterator_hasNext(itMax))
+				e->strat = sn;
+
 			listIterator_release(itSn);
 			listIterator_release(itMax);
 		}
@@ -3868,12 +3887,14 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Done.\n");
-	fprintf(e->log, "strat : %s\n", (e->strat != NULL && (enum 
+	fprintf(e->log, "strat: %s\n", (e->strat != NULL && 
+				!list_isEmpty(e->strat->strats) && (enum 
 					Strat)list_first(e->strat->strats) == STRAT_EMIT) ? "emit" : 
 			"dontemit");
 #endif
 }
 
+#if 0
 static void enforcer_computeStratNode(struct Enforcer *e)
 {
 	struct PrivateEvent *pe;
@@ -3937,6 +3958,7 @@ static void enforcer_computeStratNode(struct Enforcer *e)
 	list_free(e->realBuffer, NULL);
 	e->realBuffer = l;
 }
+#endif
 
 static void enforcer_storeCont(struct Enforcer *e, const struct SymbolTableEl 
 		*el)
@@ -4089,10 +4111,10 @@ enum Strat enforcer_getStrat(const struct Enforcer *e)
 		return STRAT_DONTEMIT;
 	}
 
-	ret = (enum Strat)((uintptr_t)listIterator_first(e->strat->strats));
+	ret = (enum Strat)((uintptr_t)list_first(e->strat->strats));
 
 #ifdef ENFORCER_PRINT_LOG
-	fprintf(e->log, "strat: %s\n", (ret == STRAT_EMIT) ? "emit" : "dontemit");
+	fprintf(e->log, "getStrat: %s\n", (ret == STRAT_EMIT) ? "emit" : "dontemit");
 #endif
 
 	return ret;
@@ -4102,6 +4124,18 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 {
 	struct SymbolTableEl *el;
 	struct TimedEvent *te;
+
+#ifdef ENFORCER_PRINT_LOG
+	fprintf(e->log, "Event received : (%u, %s)\n", e->date, event->label);
+	fprintf(e->log, "(%s, %s)\n", e->realNode->z->name, 
+			e->realNode->realWord);
+	/*
+	fprintf(e->log, "(%s, %s + ", e->realNode->z->name, 
+			e->realNode->realWord);
+	fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
+	fprintf(e->log, ") - (%s, %s)\n", e->stratNode->z->name, e->stratNode->realWord);
+	*/
+#endif
 
 	te = malloc(sizeof *te);
 	if (te == NULL)
@@ -4128,18 +4162,6 @@ unsigned int enforcer_eventRcvd(struct Enforcer *e, const struct Event *event)
 		enforcer_passUncont(e, el);
 
 	}
-#ifdef ENFORCER_PRINT_LOG
-	fprintf(e->log, "Event received : (%u, %s)\n", e->date, event->label);
-	fprintf(e->log, "(%s, %s) - (%s, %s)\n", e->realNode->z->name, 
-			e->realNode->realWord, e->stratNode->z->name, 
-			e->stratNode->realWord);
-	/*
-	fprintf(e->log, "(%s, %s + ", e->realNode->z->name, 
-			e->realNode->realWord);
-	fifo_print(e->realBuffer, (void (*)(const void *))printEvent);
-	fprintf(e->log, ") - (%s, %s)\n", e->stratNode->z->name, e->stratNode->realWord);
-	*/
-#endif
 
 	return enforcer_computeDelay(e);
 }
@@ -4152,6 +4174,7 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	struct ListIterator *it;
 	//struct Dbmw *prevZone = e->realNode->z->dbm;
 	struct List *leavesToSuppress, *leavesStillGood;
+	int i;
 
 	if (list_isEmpty(e->realBuffer))
 	{
@@ -4161,7 +4184,7 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	}
 	
 	event = list_removeHead(e->realBuffer);
-	sym = e->g->contsEls[event->index];
+	sym = e->g->contsEls[(unsigned char)event->c];
 	if (sym == NULL)
 	{
 		fprintf(e->log, "ERROR: could not find symbol associated to char %c\n", 
@@ -4194,6 +4217,10 @@ unsigned int enforcer_emit(struct Enforcer *e)
 
 	e->realNode = e->realNode->p0.succEmit;
 	it = listIterator_first(e->realBuffer);
+	i = 0;
+	while (e->realNode->word[i++] != '\0')
+		it = listIterator_next(it);
+	
 	while (listIterator_hasNext(it) && !e->realNode->isLeaf)
 	{
 		struct PrivateEvent *pe = listIterator_val(it);
@@ -4208,13 +4235,29 @@ unsigned int enforcer_emit(struct Enforcer *e)
 			listIterator_next(it))
 	{
 		struct StratNode *sn = listIterator_val(it);
-		enum Strat st = (enum Strat)((uintptr_t)list_first(sn->strats));
+		enum Strat st;
+	   
+		if (list_isEmpty(sn->strats))
+		{
+			list_addHead(leavesToSuppress, sn);
+			if (e->strat == sn)
+				e->strat = NULL;
+			continue;
+		}
+		st = (enum Strat)((uintptr_t)list_first(sn->strats));
 		if (st != STRAT_EMIT)
 			list_addHead(leavesToSuppress, sn);
 		else
 		{
 			list_removeHead(sn->strats);
-			list_append(leavesStillGood, sn);
+			if (list_isEmpty(sn->strats))
+			{
+				list_addHead(leavesToSuppress, sn);
+				if (e->strat == sn)
+					e->strat = NULL;
+			}
+			else
+				list_addHead(leavesStillGood, sn);
 		}
 	}
 	listIterator_release(it);
@@ -4222,6 +4265,9 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	list_free(leavesToSuppress, (void (*)(void *))stratNode_free);
 	list_cleanup(e->leaves, NULL);
 	list_concatList(e->leaves, leavesStillGood);
+
+	if (e->strat == NULL)
+		enforcer_computeStrats(e, 1);
 
 	/*
 	if (e->stratNode == e->realNode || !dbmw_isPointIncluded(prevZone, 
@@ -4272,7 +4318,14 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 			else
 			{
 				list_removeHead(sn->strats);
-				list_append(leavesStillGood, sn);
+				if (list_isEmpty(sn->strats))
+				{
+					list_append(leavesBad, sn);
+					if (e->strat == sn)
+						e->strat = NULL;
+				}
+				else
+					list_append(leavesStillGood, sn);
 			}
 		}
 		list_cleanup(leavesBad, (void (*)(void *))stratNode_free);
@@ -4310,7 +4363,7 @@ unsigned int enforcer_delay(struct Enforcer *e, unsigned int delay)
 void enforcer_free(struct Enforcer *e)
 {
 	FILE *out = e->log;
-	char *s;
+	/* char *s; */
 
 	fprintf(e->log, "Shutting down the enforcer...\n");
 	fprintf(e->log, "Summary of the execution:\n");
@@ -4336,17 +4389,18 @@ void enforcer_free(struct Enforcer *e)
 	fifo_free(e->output);
 
 	fprintf(e->log, "\nRemaining events in the buffer: ");
+	/*
 	s = e->realNode->word;
 	while (*s != '\0')
 	{
 		struct SymbolTableEl *el = e->g->contsEls[(unsigned char)*(s++)];
 		fprintf(e->log, "%s ", el->sym);
 	}
+	*/
 	while (!list_isEmpty(e->realBuffer))
 	{
 		struct PrivateEvent *pe = list_removeHead(e->realBuffer);
-		struct SymbolTableEl *el = list_search(e->g->contsTable, &(pe->c), 
-				cmpSymbolChar);
+		struct SymbolTableEl *el = e->g->contsEls[(unsigned char)pe->c];
 		if (el == NULL)
 		{
 			fprintf(e->log, "No symbol found for character %c. Aborting.\n", 
