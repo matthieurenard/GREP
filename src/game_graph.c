@@ -1323,6 +1323,7 @@ static struct Zone *zone_new(const struct State *s, struct Dbmw *dbm, const
 	}
 	ret->edges = list_new();
 	ret->userData = NULL;
+	ret->name = NULL;
 
 	return ret;
 }
@@ -1568,7 +1569,8 @@ static void zone_free(struct Zone *z)
 {
 	int i, n;
 
-	free(z->name);
+	if (z->name != NULL)
+		free(z->name);
 	dbmw_free(z->dbm);
 
 	free(z->contSuccs);
@@ -2223,11 +2225,11 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 				z = listIterator_val(it);
 				if (list_search(alpha, z, (int (*)(const void *, const void 
 									*))zone_areEqual) == NULL)
-					list_append(alpha, z);
+					list_append(alpha, zone_newcp(z));
 			}
 			listIterator_release(it);
 
-			list_free(posts, NULL);
+			list_free(posts, (void (*)(void *))zone_free);
 
 			list_free(alpha1, (void (*)(void *))zone_free);
 		}
@@ -2269,7 +2271,10 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 			z = list_search(rho, X, (int (*)(const void *, const void 
 							*))zone_areEqual);
 			if (z != NULL)
+			{
 				list_remove(rho, z);
+				zone_free(z);
+			}
 			for (it = listIterator_first(alpha1) ; listIterator_hasNext(it) ; it 
 					= listIterator_next(it))
 			{
@@ -2599,6 +2604,8 @@ static struct List *zoneGraph_splitZones(const struct Zone *z, const struct List
 			list_append(splits, z2);
 		}
 		listIterator_release(it2);
+
+		list_free(part, NULL);
 	}
 	listIterator_release(it);
 
@@ -2635,6 +2642,7 @@ static struct List *zoneGraph_pre(const struct Zone *z, const struct List *rho)
 			if (dbm != NULL)
 			{
 				list_append(ret, zone_newcp(z2));
+				dbmw_free(dbm);
 			}
 		}
 		
@@ -3690,7 +3698,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 {
 	struct ListIterator *it;
 	struct ListIterator *firstEvent;
-	struct List *goodLeaves = list_new();
+	struct List *goodLeaves;
 	int i;
 
 #ifdef ENFORCER_PRINT_LOG
@@ -3703,6 +3711,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 		return;
 	}
 
+	goodLeaves = list_new();
 	firstEvent = listIterator_first(e->realBuffer);
 	i = 0;
 	while (e->realNode->word[i++] != '\0')
@@ -3950,6 +3959,8 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 		}
 	}
 
+	listIterator_release(firstEvent);
+
 	/*
 	list_cleanup(e->strats, free);
 	enforcer_computeStratsRec(e, e->realNode, e->strats);
@@ -4123,7 +4134,7 @@ struct Enforcer *enforcer_new(const struct Graph *g, FILE *logFile)
 	ret->realBuffer = list_new();
 	ret->input = fifo_empty();
 	ret->output = fifo_empty();
-	ret->strats = list_new();
+	ret->strats = NULL;
 	ret->strat = NULL;
 	ret->log = logFile;
 
@@ -4346,6 +4357,8 @@ unsigned int enforcer_emit(struct Enforcer *e)
 	}
 	list_free(leavesToSuppress, NULL);
 	list_free(leavesStillGood, NULL);
+
+	free(event);
 
 	if (e->strat == NULL)
 		enforcer_computeStrats(e, 1);

@@ -324,6 +324,7 @@ struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 	}
 
 	dbmw_free(Ztmp);
+	dbmw_free(Zinter);
 
 	return ret;
 }
