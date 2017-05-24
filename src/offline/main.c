@@ -231,6 +231,11 @@ int main(int argc, char *argv[])
 		g = graph_newFromAutomaton(args.filename);
 	else if (args.fileType == GRAPH_FILE)
 		g = graph_load(args.filename);
+	else
+	{
+		fprintf(stderr, "No graph given. Aborting...\n");
+		return EXIT_FAILURE;
+	}
 
 	if (args.drawFile != NULL)
 	{

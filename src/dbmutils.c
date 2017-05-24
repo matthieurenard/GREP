@@ -325,6 +325,7 @@ struct List *dbmw_subtract(const struct Dbmw *Z0, const struct Dbmw *Z1)
 
 	dbmw_free(Ztmp);
 	dbmw_free(Zinter);
+	dbmw_free(Zremain);
 
 	return ret;
 }
@@ -421,10 +422,12 @@ struct List *dbmw_partition(const struct List *zones)
 		listIterator_release(it);
 
 		if (changed && dbmw_areEqual(Z, Zi))
-			continue;
-
-		if (!changed && list_search(ret, Z, (int (*)(const void *, const void 
-							*))dbmw_areEqual) == NULL)
+			dbmw_free(Z);
+		/* If !changed, then there cannot exist Zi in ret such that Z = Zi since 
+		 * for all Zi in ret, Zi /\ Z = 0
+		 * else if (!changed && list_search(ret, Z, (int (*)(const void *, const 
+							void *))dbmw_areEqual) == NULL) */
+		else if (!changed)
 			list_append(ret, Z);
 		else
 		{
@@ -439,6 +442,9 @@ struct List *dbmw_partition(const struct List *zones)
 			list_free(ZUZi, NULL);
 			
 			list_remove(ret, Zi);
+
+			dbmw_free(Zi);
+			dbmw_free(Z);
 		}
 	}
 

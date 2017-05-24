@@ -1738,10 +1738,15 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 			= listIterator_next(it))
 	{
 		struct SymbolTableEl *el = listIterator_val(it);
+		struct List *emptyConstraints, *emptyResets;
+		emptyConstraints = list_new();
+		emptyResets = list_new();
 		for (i = 0 ; i < a->nbStates + 1 ; i++)
 			a->states[i].contSuccs[(unsigned char)el->c] = list_new();
 		list_append(a->sinkBadState->contSuccs[(unsigned char)el->c], 
-				stateEdge_new(a, a->sinkBadState, list_new(), list_new()));
+				stateEdge_new(a, a->sinkBadState, emptyConstraints, emptyResets));
+		list_free(emptyConstraints, NULL);
+		list_free(emptyResets, NULL);
 	}
 	listIterator_release(it);
 
@@ -2152,6 +2157,7 @@ static void stringArray_free(struct StringArray *sa)
 {
 	free(sa->s);
 	arraytwo_free(sa->array);
+	free(sa->lasts);
 	free(sa);
 }
 
@@ -2286,6 +2292,7 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 			listIterator_release(it);
 			
 			list_free(alpha1, (void (*)(void *))zone_free);
+			zone_free(X);
 		}
 
 		X = NULL;
@@ -2483,6 +2490,8 @@ static struct ZoneGraph *zoneGraph_new(const struct TimedAutomaton *a)
 	zg->nbZones = list_size(zg->zones);
 
 	list_free(rho, NULL);
+	list_free(alpha, (void (*)(void *))zone_free);
+	list_free(sigma, (void (*)(void *))zone_free);
 
 	return zg;
 }
@@ -2877,10 +2886,11 @@ static void zoneGraph_free(struct ZoneGraph *zg)
 
 	if (zg->zonesS != NULL)
 	{
-		for (i = 0 ; i < zg->a->nbStates ; i++)
+		for (i = 0 ; i < zg->a->nbStates + 1 ; i++)
 		{
 			list_free(zg->zonesS[i], NULL);
 		}
+		free(zg->zonesS);
 	}
 
 	list_free(zg->zones, (void (*)(void *))zone_free);
@@ -3311,7 +3321,9 @@ struct Graph *graph_newFromAutomaton(const char *filename)
 	
 	set_applyToAll(W0, node_setWinning, NULL);
 	set_applyToAll(W0, (void (*)(void *, void *))node_computeStrat, NULL);
+
 	parser_cleanup();
+	set_free(W0);
 
 	return g;
 }
@@ -3702,7 +3714,9 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 	int i;
 
 #ifdef ENFORCER_PRINT_LOG
-	fprintf(e->log, "Computing strat...");
+	fprintf(e->log, "Computing strat: %d...", list_size(e->leaves[LEAVES_GOOD]) 
+			+ list_size(e->leaves[LEAVES_BADEMIT]) + 
+			list_size(e->leaves[LEAVES_BADSTOP]));
 #endif
 
 	if (!e->realNode->isWinning || list_isEmpty(e->realBuffer))
@@ -3860,6 +3874,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 	while (!list_isEmpty(e->leaves[LEAVES_GOOD]))
 	{
 		struct StratNode *sn = list_removeHead(e->leaves[LEAVES_GOOD]);
+		int suppressSn = 1;
 
 		/* If the node is (Z, -) such that up(Z) = Z, then in the graph there is 
 		 * a loop between the same node of both players */
@@ -3888,6 +3903,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 			else if (!listIterator_hasNext(it) && !next->isLeaf)
 			{
 				list_append(e->leaves[LEAVES_BADEMIT], sn);
+				suppressSn = 0;
 				listIterator_release(it);
 			}
 			else
@@ -3908,11 +3924,14 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 			else if (!sn->n->p0.succStopEmit->p1.succTime->isLeaf)
 			{
 				list_append(e->leaves[LEAVES_BADSTOP], sn);
+				suppressSn = 0;
 				listIterator_release(it);
 			}
 			else
 				listIterator_release(it);
 		}
+		if (suppressSn)
+			stratNode_free(sn);
 	}
 
 	list_free(e->leaves[LEAVES_GOOD], NULL);
@@ -3957,6 +3976,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 				listIterator_release(itMax);
 			}
 		}
+		listIterator_release(it);
 	}
 
 	listIterator_release(firstEvent);
