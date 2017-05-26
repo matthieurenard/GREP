@@ -26,6 +26,7 @@ struct Args
 	char *saveFilename;
 	enum FileType fileType;
 	char *filename;
+	enum EnforcerMode mode;
 };
 
 struct InputEvent
@@ -46,6 +47,7 @@ void print_usage(FILE *out, char *progName)
 			"-l, --log-file=FILE     use FILE as log file\n"
 			"-s, --save-graph=FILE   save the graph to FILE (use it with -g)\n"
 			"-t, --time-file=FILE    save times to FILE\n"
+			"-f, --fast              use fast mode\n"
 		   );
 }
 
@@ -73,6 +75,7 @@ void initArgs(struct Args *args)
 	args->timeFile = NULL;
 	args->fileType = NONE_FILE;
 	args->filename = NULL;
+	args->mode = ENFORCERMODE_DEFAULT;
 
 	args->logFile = stderr;
 }
@@ -90,10 +93,11 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 		{"graph-file", required_argument, NULL, 'g'},
 		{"save-graph", required_argument, NULL, 's'},
 		{"time-file", required_argument, NULL, 't'},
+		{"fast", no_argument, NULL, 'f'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "d:z:l:a:g:s:t:", longOptions, &optionIndex)) != 
+	while ((c = getopt_long(argc, argv, "d:z:l:a:g:s:t:f", longOptions, &optionIndex)) != 
 			-1)
 	{
 		if (c == 0)
@@ -130,6 +134,15 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 				}
 			break;
 
+			case 'a':
+			case 'g':
+				if (c == 'a')
+					args->fileType = AUTOMATON_FILE;
+				else
+					args->fileType = GRAPH_FILE;
+				args->filename = optarg;
+			break;
+
 			case 's':
 				args->saveFilename = optarg;
 			break;
@@ -144,13 +157,8 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 				}
 			break;
 
-			case 'a':
-			case 'g':
-				if (c == 'a')
-					args->fileType = AUTOMATON_FILE;
-				else
-					args->fileType = GRAPH_FILE;
-				args->filename = optarg;
+			case 'f':
+			args->mode = ENFORCERMODE_FAST;
 			break;
 
 			case '?':
@@ -252,7 +260,7 @@ int main(int argc, char *argv[])
 		graph_save(g, args.saveFilename);
 	}
 
-	e = enforcer_new(g, args.logFile);
+	e = enforcer_new(g, args.logFile, args.mode);
 
 	events = readEvents();
 

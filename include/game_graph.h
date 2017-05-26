@@ -12,6 +12,7 @@ struct Enforcer;
 
 enum EdgeType {EMIT, STOPEMIT, CONTRCVD, UNCONTRCVD, TIMELPSD};
 enum Strat {STRAT_EMIT, STRAT_DONTEMIT};
+enum EnforcerMode {ENFORCERMODE_DEFAULT, ENFORCERMODE_FAST};
 
 struct Edge
 {
@@ -56,7 +57,7 @@ char *zone_getName(const struct Zone *);
 void zone_setData(struct Zone *, void *);
 void *zone_getData(const struct Zone *);
 
-struct Enforcer *enforcer_new(const struct Graph *, FILE *);
+struct Enforcer *enforcer_new(const struct Graph *, FILE *, enum EnforcerMode);
 enum Strat enforcer_getStrat(const struct Enforcer *);
 unsigned int enforcer_eventRcvd(struct Enforcer *, const struct Event *);
 unsigned int enforcer_emit(struct Enforcer *);

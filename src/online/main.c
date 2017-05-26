@@ -19,6 +19,7 @@ struct Args
 	FILE *logFile;
 	char *automatonFile;
 	unsigned int pollingTime;
+	enum EnforcerMode mode;
 };
 
 
@@ -30,6 +31,7 @@ void print_usage(FILE *out, char *progName)
 			"-d, --drawgraph=FILE    print the game graph in FILE\n"
 			"-l, --log-file=FILE     use FILE as log file\n"
 			"-p, --polling=TIME      update the enforcer every TIME ms\n"
+			"-f, --fast              use fast mode\n"
 		   );
 }
 
@@ -55,6 +57,7 @@ void initArgs(struct Args *args)
 	args->drawZoneFile = NULL;
 	args->automatonFile = NULL;
 	args->pollingTime = 0;
+	args->mode = ENFORCERMODE_DEFAULT;
 
 	args->logFile = stderr;
 }
@@ -69,10 +72,11 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 		{"draw-zone-graph", required_argument, NULL, 'z'},
 		{"log-file", required_argument, NULL, 'l'},
 		{"polling", required_argument, NULL, 'p'},
+		{"fast", no_argument, NULL, 'f'},
 		{0, 0, 0, 0}
 	};
 
-	while ((c = getopt_long(argc, argv, "d:z:l:", longOptions, &optionIndex)) != 
+	while ((c = getopt_long(argc, argv, "d:z:l:p:f", longOptions, &optionIndex)) != 
 			-1)
 	{
 		if (c == 0)
@@ -112,6 +116,11 @@ int parseArgs(int argc, char *argv[], struct Args *args)
 
 			case 'p':
 				args->pollingTime = atoi(optarg);
+			break;
+
+			case 'f':
+				args->mode = ENFORCERMODE_FAST;
+			break;
 
 			case '?':
 			break;
@@ -159,7 +168,7 @@ int main(int argc, char *argv[])
 		fclose(args.drawZoneFile);
 	}
 
-	e = enforcer_new(g, args.logFile);
+	e = enforcer_new(g, args.logFile, args.mode);
 
 	if (gettimeofday(&previousTime, NULL) == -1)
 	{
