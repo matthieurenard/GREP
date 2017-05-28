@@ -3771,7 +3771,8 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 				fprintf(stderr, "%s ", sym->sym);
 			}
 			listIterator_release(it);
-			fprintf(stderr, "\nrealNode: (%s, %s)\n", e->realNode->z->name, e->realNode->realWord);
+			fprintf(stderr, "\nrealNode: (%s, %s)\n", e->realNode->z->name, 
+					e->realNode->realWord);
 			enforcer_free(e);
 			exit(EXIT_FAILURE);
 		}
@@ -4039,12 +4040,7 @@ static void enforcer_computeStrats(struct Enforcer *e, int clear)
 	*/
 
 	if (e->strat != NULL && list_isEmpty(e->strat->strats))
-	{
-		fprintf(e->log, "Empty strats to go from (%s, %s) to (%s, %s)\n", 
-				e->realNode->z->name, e->realNode->realWord, 
-				e->strat->n->z->name, e->strat->n->realWord);
 		e->strat = NULL;
-	}
 
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "Done.\n");
