@@ -1,0 +1,52 @@
+#!/usr/bin/python
+
+import sys
+import random
+
+def usage(name):
+    print 'usage: ' + name + ' <number> <length> <delayMax>' +\
+    '<fileTiPEX> <fileGame> <actionsTiPEX> [<actionsGame]'
+
+def genTraces(n, length, delayMax, tipexFilename, gameFilename, actionsT, 
+        actionsG):
+    tipexFile = open(tipexFilename, 'w')
+    gameFile = open(gameFilename, 'w')
+
+    for i in range(0, n):
+        tipexSeq = ''
+        gameSeq = ''
+        date = 0
+        for j in range(0, length):
+            delay = random.randint(0, delayMax)
+            date += delay
+            index = random.randint(0, len(actionsT) - 1)
+            actionT = actionsT[index]
+            actionG = actionsG[index]
+            tipexSeq += '(' + actionT + ',' + str(delay) + ')'
+            gameSeq += '(' + str(date) + ', ' + actionG + ')'
+        tipexSeq += '\n'
+        gameSeq += '\n'
+        tipexFile.write(tipexSeq)
+        gameFile.write(gameSeq)
+
+    tipexFile.close()
+    gameFile.close()
+
+if __name__=='__main__':
+    if len(sys.argv) < 7:
+        usage(sys.argv[0])
+        sys.exit(1)
+
+    actionsT = sys.argv[6]
+    actionsT = actionsT.replace(' ', '')
+    actionsT = actionsT.split(',')
+    if (len(sys.argv) >= 8):
+        actionsG = sys.argv[7]
+        actionsG = actionsG.replace(' ', '')
+        actionsG = actionsG.split(',')
+    else:
+        actionsG = actionsT
+
+    genTraces(int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4], 
+            sys.argv[5], actionsT, actionsG) 
+
