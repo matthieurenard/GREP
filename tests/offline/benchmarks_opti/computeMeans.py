@@ -27,7 +27,3 @@ meansMax = computeMeans("maxTimes")
 print "Means of max: "
 print meansMax
 
-meansFormer = computeMeans("times_former")
-print "Means of former tool: "
-print meansFormer
-

@@ -231,6 +231,7 @@ int main(int argc, char *argv[])
 	struct InputEvent *event = NULL;
 	long unsigned int time = 0;
 	struct timespec precTime, currentTime;
+	int isFirstEvent;
 
 	initArgs(&args);
 	parseArgs(argc, argv, &args);
@@ -273,6 +274,7 @@ int main(int argc, char *argv[])
 	else
 		nextDelay = 0;
 	time = 0;
+	isFirstEvent = 1;
 	while (event != NULL || nextDate > date)
 	{
 		struct Event enfEvent;
@@ -283,11 +285,13 @@ int main(int argc, char *argv[])
 		{
 			if (args.timeFile != NULL)
 			{
-				if (time != 0)
+				if (!isFirstEvent)
 				{
 					fprintf(args.timeFile, "%lu ", time);
 					time = 0;
 				}
+				else
+					isFirstEvent = 0;
 				if (clock_gettime(CLOCK, &precTime) == -1)
 				{
 					perror("clock_gettime prec delay");
