@@ -15,7 +15,7 @@ Dependencies:
 	-Uppaal DBM library. This can be downloaded from uppaal.org (section 
 download -> uppaal DBM library -> download).
 	-graphviz (apt-get install graphviz-dev on Ubuntu) to print the graphs
-	-ccontainers (included, install them before)
+	-ccontainers: https://github.com/matthieurenard/ccontainers
 
 
 The first thing to do to build this software is to generate the configure 
