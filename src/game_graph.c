@@ -4194,6 +4194,8 @@ static void enforcer_passUncontDefault(struct Enforcer *e, const struct
 	te->event = strdup(el->sym);
 	fifo_enqueue(e->output, te);
 
+	printf("(%lu, %s)", e->date, el->sym);
+
 	for (it = 
 			listIterator_first(e->realNode->p0.succStopEmit->
 				z->resetsUnconts[el->index]) ; listIterator_hasNext(it) ; it = 
@@ -4240,17 +4242,9 @@ static void enforcer_passUncontFast(struct Enforcer *e, const struct
 	}
 	te->date = e->date;
 	te->event = strdup(el->sym);
-	fifo_enqueue(e->input, te);
-
-	te = malloc(sizeof *te);
-	if (te == NULL)
-	{
-		perror("malloc enforcer_eventRcvd:te");
-		exit(EXIT_FAILURE);
-	}
-	te->date = e->date;
-	te->event = strdup(el->sym);
 	fifo_enqueue(e->output, te);
+
+	printf("(%lu, %s)", e->date, el->sym);
 
 	for (it = 
 			listIterator_first(e->realNode->p0.succStopEmit->z->
@@ -4322,7 +4316,7 @@ static unsigned int enforcer_emitDefault(struct Enforcer *e)
 
 	if (e->realNode->p0.succEmit == NULL)
 	{
-		fprintf(e->log, "ERROR: cannot emit with an empty buffer.\n");
+		fprintf(stderr, "ERROR: cannot emit with an empty buffer.\n");
 		enforcer_free(e);
 		exit(EXIT_FAILURE);
 	}
@@ -4331,7 +4325,7 @@ static unsigned int enforcer_emitDefault(struct Enforcer *e)
 	sym = e->g->contsEls[(unsigned char)event->c];
 	if (sym == NULL)
 	{
-		fprintf(e->log, "ERROR: could not find symbol associated to char %c\n", 
+		fprintf(stderr, "ERROR: could not find symbol associated to char %c\n", 
 				e->realNode->word[0]);
 		exit(EXIT_FAILURE);
 	}
@@ -4339,6 +4333,8 @@ static unsigned int enforcer_emitDefault(struct Enforcer *e)
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "emitting (%u, %s)\n", e->date, sym->sym);
 #endif
+
+	printf("(%u, %s)", e->date, sym->sym);
 
 	te = malloc(sizeof *te);
 	if (te == NULL)
@@ -4459,6 +4455,8 @@ static unsigned int enforcer_emitFast(struct Enforcer *e)
 #ifdef ENFORCER_PRINT_LOG
 	fprintf(e->log, "emitting (%u, %s)\n", e->date, sym->sym);
 #endif
+
+	printf("(%u, %s)", e->date, sym->sym);
 
 	te = malloc(sizeof *te);
 	if (te == NULL)
@@ -4770,6 +4768,7 @@ void enforcer_free(struct Enforcer *e)
 	int i;
 	/* char *s; */
 
+	printf("\n");
 	fprintf(e->log, "Shutting down the enforcer...\n");
 	fprintf(e->log, "Summary of the execution:\n");
 

@@ -1,5 +1,3 @@
-
-
 def computeMeans(filename):
     meansFile = open(filename, 'r')
     meansRuns = meansFile.readlines()

@@ -284,6 +284,7 @@ void drawZoneGraph(const struct ZoneGraph *zg, FILE *outFile)
 	struct VizZone *zviz;
 	int i;
 	char *colors[5];
+	char *heads[5];
 	char *name;
 
 	colors[EMIT] = "green";
@@ -292,6 +293,12 @@ void drawZoneGraph(const struct ZoneGraph *zg, FILE *outFile)
 	colors[CONTRCVD] = "orange";
 	colors[TIMELPSD] = "purple";
 
+	heads[EMIT] = "normal";
+	heads[STOPEMIT] = "empty";
+	heads[UNCONTRCVD] = "diamond";
+	heads[CONTRCVD] = "ediamond";
+	heads[TIMELPSD] = "vee";
+
 	gviz = agopen("G", Agdirected, NULL);
 	agattr(gviz, AGRAPH, "overlap", "false");
 	//agattr(gviz, AGRAPH, "ratio", "fill");
@@ -299,6 +306,7 @@ void drawZoneGraph(const struct ZoneGraph *zg, FILE *outFile)
 	agattr(gviz, AGNODE, "shape", "ellipse");
 	agattr(gviz, AGNODE, "peripheries", "1");
 	agattr(gviz, AGEDGE, "color", "black");
+	agattr(gviz, AGEDGE, "arrowhead", "normal");
 
 	for (it = listIterator_first(zoneGraph_getZones(zg)) ; 
 			listIterator_hasNext(it) ; it = listIterator_next(it))
@@ -333,6 +341,7 @@ void drawZoneGraph(const struct ZoneGraph *zg, FILE *outFile)
 			gedge = agedge(gviz, gnode, gdest, name, TRUE);
 			free(name);
 			agset(gedge, "color", colors[e->type]);
+			agset(gedge, "arrowhead", heads[e->type]);
 		}
 		listIterator_release(it);
 	}
