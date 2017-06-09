@@ -1,0 +1,10 @@
+*.png
+.clang_complete
+*.swp
+*.in
+*.in~
+aclocal.m4
+autom4te.cache/
+autotools/
+build/
+configure

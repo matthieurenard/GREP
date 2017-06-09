@@ -1,0 +1,30 @@
+automaton
+{
+	uncont {clicA, clicB}
+	cont {action}
+
+	nodes
+	{
+		l0[initial,accepting];
+		l1[accepting];
+		l2[accepting];
+		bad;
+	}
+
+	clocks {x}
+
+	edges
+	{
+		l0 ->{clicA}{}{} l0;
+		l0 ->{clicB}{x}{} l1;
+		l0 ->{action}{}{} bad;
+		l1 ->{clicA}{}{} l0;
+		l1 ->{clicB}{}{x <= 3000} l2;
+		l1 ->{clicB}{x}{x > 3000} l1;
+		l1 ->{action}{}{} bad;
+		l2 ->{action}{}{} l0;
+		l2 ->{clicA}{}{} l2;
+		l2 ->{clicB}{}{} l2;
+	}
+}
+

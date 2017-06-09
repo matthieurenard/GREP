@@ -1,0 +1,26 @@
+automaton
+{
+	cont {a, r}
+	uncont {}
+
+	nodes
+	{
+		s1[initial,accepting];
+		s2[accepting];
+		s3;
+	}
+
+	clocks {x}
+
+	edges
+	{
+		s1 ->{a}{}{} s1;
+		s1 ->{r}{x}{} s2;
+		s2 ->{a}{}{} s2;
+		s2 ->{r}{x}{x >= 5} s2;
+		s2 ->{r}{}{x < 5} s3;
+		s3 ->{a}{}{} s3;
+		s3 ->{r}{}{} s3;
+	}
+}
+
