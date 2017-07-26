@@ -21,6 +21,14 @@
 #define CANARY			0xdeadbeefdeadbeefUL
 #define NBLEAVESTYPES	3
 
+#ifndef ENFORCER_VERDICT_WIN
+	#define ENFORCER_VERDICT_WIN "WIN"
+#endif
+
+#ifndef ENFORCER_VERDICT_LOSS
+	#define ENFORCER_VERDICT_LOSS "LOSS"
+#endif
+
 
 enum ContType {CONTROLLABLE, UNCONTROLLABLE};
 enum LeavesType {LEAVES_GOOD, LEAVES_BADSTOP, LEAVES_BADEMIT};
@@ -4194,7 +4202,7 @@ static void enforcer_passUncontDefault(struct Enforcer *e, const struct
 	te->event = strdup(el->sym);
 	fifo_enqueue(e->output, te);
 
-	printf("(%lu, %s)", e->date, el->sym);
+	printf("(%u, %s)", e->date, el->sym);
 
 	for (it = 
 			listIterator_first(e->realNode->p0.succStopEmit->
@@ -4244,7 +4252,7 @@ static void enforcer_passUncontFast(struct Enforcer *e, const struct
 	te->event = strdup(el->sym);
 	fifo_enqueue(e->output, te);
 
-	printf("(%lu, %s)", e->date, el->sym);
+	printf("(%u, %s)", e->date, el->sym);
 
 	for (it = 
 			listIterator_first(e->realNode->p0.succStopEmit->z->
@@ -4823,8 +4831,8 @@ void enforcer_free(struct Enforcer *e)
 		list_free(e->leaves[i], (void (*)(void *))stratNode_free);
 	}
 
-	fprintf(e->log, "VERDICT: %s\n", (e->realNode->isAccepting) ? "WIN" : 
-			"LOSS");
+	fprintf(e->log, "VERDICT: %s\n", (e->realNode->isAccepting) ? 
+			ENFORCER_VERDICT_WIN : ENFORCER_VERDICT_LOSS);
 	free(e);
 
 	fprintf(out, "Enforcer shutdown.\n");
