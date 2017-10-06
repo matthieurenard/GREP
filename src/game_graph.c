@@ -1706,7 +1706,7 @@ static struct TimedAutomaton *timedAutomaton_new(const struct List *contsTable,
 	a->states = malloc((a->nbStates + 1) * sizeof *(a->states));
 	if (a->states == NULL)
 	{
-		perror("malloc a->states");
+		perror("malloc timedAutomaton_new:a->states");
 		exit(EXIT_FAILURE);
 	}
 
@@ -2806,7 +2806,7 @@ static struct List *zoneGraph_post(const struct Zone *z, struct List *rho)
 			if (z->s->uncontSuccs[i] != NULL)
 			{
 				struct ListIterator *it2;
-				for (it2 = listIterator_first(z2->s->uncontSuccs[i]) ; 
+				for (it2 = listIterator_first(z->s->uncontSuccs[i]) ; 
 						listIterator_hasNext(it2) ; it2 = 
 						listIterator_next(it2))
 				{
