@@ -50,6 +50,7 @@
 /* Avoid compiler warnings about unused variable/function */
 %option noinput
 %option nounput
+%option noyywrap
 
 %x CSTYLE_COMMENT
 %x CPPSTYLE_COMMENT
