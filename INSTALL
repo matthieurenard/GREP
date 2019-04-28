@@ -16,6 +16,7 @@ Dependencies:
 download -> uppaal DBM library -> download).
 	-graphviz (apt-get install graphviz-dev on Ubuntu) to print the graphs
 	-ccontainers: https://github.com/matthieurenard/ccontainers
+	-R to plot benchmarks (r-base, r-base-dev packets on debian/ubuntu).
 
 
 The first thing to do to build this software is to generate the configure 

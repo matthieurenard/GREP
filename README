@@ -1,3 +1,17 @@
 The purpose of this project is to visualize the games (graphs) corresponding to 
 the enforcement of some property, and use these graphs to enforce properties.
 
+To try the tool, one can follow instructions at 
+https://github.com/matthieurenard/testGREP, that describe how to download a VM 
+containing all the tools to run GREP and some benchmarks.
+
+To compile GREP, follow instructions in the INSTALL file.
+
+To run benchmarks, follow instructions in the README.md file at 
+https://github.com/matthieurenard/testGREP under the section "Running 
+benchmarks".
+
+Note that running benchmarks should not be done inside a VM, since it can alter 
+performance. Use the VM to test the tool, not to run proper benchmarks. To do 
+so, compile GREP on a non-virtualized system.
+
